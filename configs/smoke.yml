@@ -1,0 +1,6 @@
+# Milestone 1 smoke test: one cached call to the generator model.
+base: llm.yml
+
+workflow:
+  _type: smoke_workflow
+  llm_name: generator

@@ -1,0 +1,39 @@
+{
+  "version": "v1",
+  "seed": 2026,
+  "created_unix": 1793286796,
+  "source": {
+    "repo": "hotpotqa/hotpot_qa",
+    "revision": "1908d6afbbead072334abe2965f91bd2709910ab",
+    "file": "distractor/validation-00000-of-00001.parquet",
+    "sha256": "c20b638ca82b21d04fe12e14ff417ad05153d4d215a65de54497fca4e972f7c6"
+  },
+  "counts": {
+    "corpus_passages": 3573,
+    "injected_passages": 15,
+    "test": {
+      "answerable": 250,
+      "adversarial_question": 12,
+      "adversarial_corpus": 12,
+      "unanswerable": 30
+    },
+    "dev": {
+      "answerable": 50,
+      "adversarial_question": 3,
+      "adversarial_corpus": 3,
+      "unanswerable": 6
+    },
+    "pilot": {
+      "answerable": 14,
+      "unanswerable": 2,
+      "adversarial_question": 2,
+      "adversarial_corpus": 2
+    }
+  },
+  "sha256": {
+    "corpus": "be4df8a12f201272b2cafbb9123e09b9d8e3c7ef6cd5ae8011ed162c0170b2ea",
+    "test": "d6cf0f64ad671bb0acbcb9f11e39e123970d39746dc13d3b2971fbc878ec51a5",
+    "dev": "9b629bba970a8702f3ced59e19ace1265784dd1538a8dd67392140af1e231e18",
+    "pilot": "ddead387ad13fea40d9eb9c2ec5af8d31a0304ebd497f212821a65bf9ef78266"
+  }
+}

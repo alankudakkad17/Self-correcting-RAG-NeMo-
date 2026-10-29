@@ -1,0 +1,18 @@
+# System B: A + hybrid retrieval. BM25 + dense (50 each) -> RRF -> rerank top 30 -> top 5.
+base: llm.yml
+
+functions:
+  retriever:
+    _type: corpus_retriever
+    embedder_name: corpus_embedder
+    mode: hybrid
+    reranker: hosted   # hosted | local | none (local = MiniLM cross-encoder, for the reranker ablation)
+    top_k: 5
+    candidates: 50
+    rerank_pool: 30
+
+workflow:
+  _type: baseline_rag_workflow
+  llm_name: generator
+  retriever: retriever
+  system_id: B

@@ -1,0 +1,63 @@
+# Bot messages double as status markers: src/guardrails/rails.py checks which rail stopped the flow.
+
+define bot refuse injection
+  "BLOCKED: prompt injection"
+
+define bot refuse off topic
+  "BLOCKED: off topic"
+
+define bot refuse unsafe
+  "BLOCKED: unsafe request"
+
+define bot refuse ungrounded
+  "BLOCKED: not grounded"
+
+define bot refuse citations
+  "BLOCKED: bad citations"
+
+# ---- input rails (the question) ----
+
+define flow check prompt injection
+  $ok = execute check_question_injection(text=$user_message)
+  if not $ok
+    bot refuse injection
+    stop
+
+define flow check off topic
+  $ok = execute check_question_topic(text=$user_message)
+  if not $ok
+    bot refuse off topic
+    stop
+
+define flow check unsafe request
+  $ok = execute check_question_safety(text=$user_message)
+  if not $ok
+    bot refuse unsafe
+    stop
+
+# ---- retrieval rail (each passage, run as a named output flow) ----
+
+define flow sanitize passage
+  $bot_message = execute sanitize_passage_text(text=$bot_message)
+
+# ---- output rails (the final answer; $report is the JSON claims report from the Controller) ----
+
+define flow check groundedness
+  $ok = execute check_answer_grounded(text=$bot_message, report=$report)
+  if not $ok
+    bot refuse ungrounded
+    stop
+
+define flow check citation format
+  $ok = execute check_citation_format(report=$report)
+  if not $ok
+    bot refuse citations
+    stop
+
+define flow redact pii
+  $bot_message = execute redact_answer_pii(text=$bot_message)
+
+# ---- abstention rail (retry cap hit or an output rail blocked) ----
+
+define flow abstention response
+  $bot_message = "I could not find enough evidence in the documents to answer this reliably (insufficient evidence)."

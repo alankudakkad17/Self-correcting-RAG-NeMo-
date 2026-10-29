@@ -1,0 +1,18 @@
+# Secrets
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# Large or regenerable data (frozen eval sets in data/eval/ ARE committed)
+data/raw/
+data/index/
+data/cache/
+
+# Per-run logs; summary tables are committed explicitly later
+eval/results/runs/
+.nat/

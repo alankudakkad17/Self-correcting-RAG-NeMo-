@@ -1,0 +1,64 @@
+# Shared model definitions. System configs pull this in with `base: llm.yml` (deep-merged by the toolkit).
+# The API key is NOT set here: src/llm.py reads NVIDIA_API_KEY from the environment / .env.
+#
+# Thinking is switched off through chat_template_kwargs (passed straight to the endpoint).
+# The toolkit's own `thinking:` field does not recognise nvidia/nemotron-3* model names.
+
+llms:
+  # Planner + Researcher.
+  # (nvidia/nemotron-3-super-120b-a12b is listed but returned 404 "not found for account" on 2026-10-29;
+  #  this is the same 120B/12B-active design, one generation newer, text+image input.)
+  generator:
+    _type: nim
+    model_name: nvidia/nemotron-3.5-super-vl-120b-a12b
+    base_url: ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
+    temperature: 0.0
+    max_tokens: 1024
+    chat_template_kwargs:
+      enable_thinking: false
+
+  # Verifier: a different model from the generator
+  verifier:
+    _type: nim
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
+    base_url: ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
+    temperature: 0.0
+    max_tokens: 1024
+    chat_template_kwargs:
+      enable_thinking: false
+
+  # Fallback verifier if the preview model above is unavailable
+  # (nvidia/nemotron-nano-3-30b-a3b returned 404 for this account on 2026-10-29)
+  verifier_fallback:
+    _type: nim
+    model_name: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
+    base_url: ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
+    temperature: 0.0
+    max_tokens: 1024
+    chat_template_kwargs:
+      enable_thinking: false
+
+  # Evaluation only: strongest model, fixed judge, never used by any system
+  judge:
+    _type: nim
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    base_url: ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
+    temperature: 0.0
+    max_tokens: 1024
+    chat_template_kwargs:
+      enable_thinking: false
+
+  # Different model family, used only for the judge-agreement check
+  judge_alt:
+    _type: nim
+    model_name: mistralai/mistral-large-4-1t-a52b
+    base_url: ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
+    temperature: 0.0
+    max_tokens: 1024
+
+embedders:
+  # Corpus + query embeddings for the FAISS index (2048-dim). Changing it requires `python scripts/build_index.py`.
+  corpus_embedder:
+    _type: nim
+    model_name: nvidia/nemotron-3.5-embed-1b
+    base_url: ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}

@@ -1,0 +1,133 @@
+"""Prompts for all systems. Tune on the dev split only, never on test.
+
+Few-shot examples are invented (not from HotpotQA) so no eval data leaks into prompts.
+No prompt before system E tells the model to ignore injected instructions: injection defence is the job
+of the guardrails (E), so the D vs E ablation measures them alone.
+"""
+
+import json
+
+from src.state import ABSTAIN_TEXT
+from src.state import Claim
+from src.state import RetrievedDoc
+from src.state import Verdict
+
+ANSWER_FORMAT = (
+    "Give only the short answer: a name, date, number, short phrase, or yes/no. No explanation, no full sentence. "
+    f"If you cannot answer, reply exactly: {ABSTAIN_TEXT}")
+
+LLM_ONLY_SYSTEM = f"You answer questions from your own knowledge. {ANSWER_FORMAT}"
+
+RAG_SYSTEM = ("You answer questions using only the context documents provided. "
+              f"If the documents do not contain the answer, say so. {ANSWER_FORMAT}")
+
+
+def format_context(docs: list[RetrievedDoc]) -> str:
+    return "\n\n".join(f"[{d.doc_id}] {d.title}\n{d.text}" for d in docs)
+
+
+def rag_user_prompt(question: str, docs: list[RetrievedDoc]) -> str:
+    return f"Context documents:\n\n{format_context(docs)}\n\nQuestion: {question}"
+
+
+def clean_answer(text: str) -> tuple[str, bool]:
+    """Strip quotes/trailing period; return (answer, abstained)."""
+    answer = text.strip().strip('"').strip("'").strip()
+    if answer.endswith(".") and answer.count(" ") < 8:
+        answer = answer[:-1]
+    return answer, ABSTAIN_TEXT in answer.lower()
+
+
+# ---- Milestone 3: Planner, Researcher, Verifier ----
+
+PLANNER_SYSTEM = """You break a question into the sub-questions needed to answer it from an encyclopedia.
+Return 1 to 4 short, self-contained sub-questions, each answerable by looking up one article.
+For a comparison, ask one sub-question per entity. For a chain ("the X of the Y of Z"), ask in order.
+Reply with JSON only: {"sub_questions": ["...", "..."]}
+
+Example
+Question: Which river is longer, the one through Lisbon or the one through Seville?
+{"sub_questions": ["Which river flows through Lisbon?", "Which river flows through Seville?",
+"How long is the Tagus river?", "How long is the Guadalquivir river?"]}"""
+
+RESEARCHER_SYSTEM = f"""You answer a question using only the numbered context passages, and you justify the answer
+with claims. Each claim is one factual statement needed for the answer, citing one passage by its id
+(the text in square brackets), with a quote copied word for word from that passage.
+Rules:
+- Use only the passages.
+- "answer" is the short answer only (a name, date, number, short phrase, or yes/no).
+- Give 1 to 4 claims that together lead to the answer.
+- If the passages do not contain the answer, set "answer" to "{ABSTAIN_TEXT}" and "claims" to [].
+Reply with JSON only:
+{{"answer": "...", "claims": [{{"text": "...", "doc_id": "...", "quote": "..."}}]}}
+
+Example
+Passages: [Ana_Ruiz] Ana Ruiz is a painter born in Toledo in 1950. [Toledo] Toledo is a city in Spain.
+Question: In which country was Ana Ruiz born?
+{{"answer": "Spain", "claims": [
+ {{"text": "Ana Ruiz was born in Toledo.", "doc_id": "Ana_Ruiz", "quote": "Ana Ruiz is a painter born in Toledo"}},
+ {{"text": "Toledo is in Spain.", "doc_id": "Toledo", "quote": "Toledo is a city in Spain"}}]}}"""
+
+VERIFIER_SYSTEM = """You check whether each claim is backed by the passage it cites.
+For each claim, label it:
+- "supported": the cited passage states it (paraphrase is fine).
+- "contradicted": the cited passage or another passage states something incompatible with it.
+- "unsupported": the passages neither state nor contradict it, or the cited passage is missing.
+Claim 0 is a reasoning check, not a quoted fact: "assuming claims 1..n are true, the answer to the question
+follows". No claim needs to say "this is the answer"; judge whether a careful reader would conclude it.
+Example: "X was a Field Marshal" + "Field Marshal has been the top rank since 1736" -> claim 0 supported for
+"Since when has X's rank been the top rank? 1736".
+Label claim 0 "unsupported" only if a step needed to reach the answer is missing, or if a claim is about a
+different person, place or thing than the question asks about (a similar name is not the same entity).
+Label it "contradicted" if the claims or passages point to a different answer.
+Judge only against the passages, not your own knowledge.
+Reply with JSON only, one verdict for claim 0 first and then one for every numbered claim:
+{"verdicts": [{"claim_id": 0, "label": "supported", "reason": "short reason"},
+{"claim_id": 1, "label": "supported", "reason": "short reason"}]}"""
+
+
+def numbered_context(docs: list[RetrievedDoc]) -> str:
+    return "\n\n".join(f"[{d.doc_id}] {d.title}: {d.text}" for d in docs)
+
+
+def planner_user_prompt(question: str) -> str:
+    return f"Question: {question}"
+
+
+def researcher_user_prompt(question: str, docs: list[RetrievedDoc], sub_questions: list[str] | None = None,
+                           feedback: str | None = None) -> str:
+    parts = [f"Passages:\n{numbered_context(docs)}"]
+    if sub_questions:
+        parts.append("Sub-questions to resolve:\n" + "\n".join(f"- {s}" for s in sub_questions))
+    if feedback:
+        parts.append(f"Feedback on your previous draft:\n{feedback}")
+    parts.append(f"Question: {question}")
+    return "\n\n".join(parts)
+
+
+def unsupported_feedback(claims: list[Claim]) -> str:
+    lines = "\n".join(f"- {c.text}" for c in claims)
+    return ("These claims could not be verified against their cited passages. More passages were retrieved. "
+            f"Rewrite the answer; cite only what the passages state:\n{lines}")
+
+
+def contradicted_feedback(claims: list[Claim], verdicts: dict[int, Verdict]) -> str:
+    lines = "\n".join(f"- {c.text} (checker: {verdicts[c.claim_id].reason})" for c in claims)
+    return ("These claims are contradicted by the passages. Drop them and answer again using only statements "
+            f"the passages support:\n{lines}")
+
+
+def answer_feedback(verdict: Verdict) -> str:
+    return (f"Your claims do not establish the answer to this exact question (checker: {verdict.reason}). "
+            "Check that each entity is the one the question asks about, and that no step is missing.")
+
+
+def answer_claim_text(question: str, answer: str) -> str:
+    return f'The answer to the question "{question}" is: {answer}'
+
+
+def verifier_user_prompt(question: str, answer: str, claims: list[Claim], docs: list[RetrievedDoc]) -> str:
+    claim_list = json.dumps([{"claim_id": c.claim_id, "text": c.text, "cites": c.doc_id, "quote": c.quote}
+                             for c in claims], ensure_ascii=False, indent=1)
+    return (f"Passages:\n{numbered_context(docs)}\n\nClaims:\n{claim_list}\n\n"
+            f"Claim 0 (reasoning check): {answer_claim_text(question, answer)}")

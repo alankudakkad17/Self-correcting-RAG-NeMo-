@@ -1,0 +1,2 @@
+# Frozen data is hashed byte-for-byte (data/eval/manifest.json): never convert its line endings.
+data/** -text

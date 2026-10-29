@@ -1,0 +1,13 @@
+# System D: C + Verifier (different model) + Controller loop (retry / revise / abstain).
+base: C.yml
+
+functions:
+  verifier:
+    _type: verifier
+    llm_name: verifier   # nvidia/nemotron-3.5-lightning-30b-a3b; the Researcher uses `generator`
+
+workflow:
+  verifier: verifier
+  retry_cap: 2           # ablation: 0 / 1 / 2 / 4
+  per_claim_k: 3
+  system_id: D
