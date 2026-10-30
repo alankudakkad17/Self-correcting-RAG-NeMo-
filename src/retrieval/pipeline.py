@@ -1,26 +1,19 @@
-"""Retrieval modes used by the systems.
+"""Hybrid retrieval: BM25 + dense (FAISS) candidates, fused with reciprocal rank fusion, then reranked.
 
-- vector: dense search only (system A, "standard RAG")
-- bm25:   sparse search only (for ablations)
-- hybrid: BM25 + dense, fused with RRF, then reranking (system B and later)
-
-Dev-set retrieval check (50 answerable questions, recall@5): bm25 0.71, vector 0.92, plain RRF 0.77,
-RRF + local MiniLM rerank 0.80, RRF top-30 + hosted Nemotron rerank 0.95. Hence the hosted default.
+Dev-set check that chose this setup (50 answerable questions, recall@5): bm25 0.71, dense 0.92, plain RRF 0.77,
+RRF + local MiniLM rerank 0.80, RRF top-30 + hosted Nemotron rerank 0.95.
 """
 
 import json
-from typing import Literal
 
 from src import paths
 from src.retrieval.bm25 import BM25Index
 from src.retrieval.fusion import reciprocal_rank_fusion
+from src.retrieval.reranker import HostedReranker
 from src.retrieval.vector import Embedder
 from src.retrieval.vector import VectorIndex
 from src.state import Passage
 from src.state import RetrievedDoc
-
-Mode = Literal["vector", "bm25", "hybrid"]
-RerankerKind = Literal["hosted", "local", "none"]
 
 
 def load_corpus() -> dict[str, Passage]:
@@ -31,33 +24,20 @@ def load_corpus() -> dict[str, Passage]:
 
 class RetrievalPipeline:
 
-    def __init__(self, embedder: Embedder, reranker: RerankerKind = "hosted"):
+    def __init__(self, embedder: Embedder):
         self.corpus = load_corpus()
         self.bm25 = BM25Index(list(self.corpus.values()))
         self.vectors = VectorIndex.load()
         if self.vectors.model != embedder.model:
             raise ValueError(f"index was built with {self.vectors.model}, config asks for {embedder.model}")
         self.embedder = embedder
-        self.reranker = None
-        if reranker == "hosted":
-            from src.retrieval.reranker import HostedReranker
-            self.reranker = HostedReranker()
-        elif reranker == "local":
-            from src.retrieval.reranker import LocalReranker
-            self.reranker = LocalReranker()
+        self.reranker = HostedReranker()
 
-    async def search(self, query: str, mode: Mode, k: int = 5, candidates: int = 50,
-                     rerank_pool: int = 30) -> list[RetrievedDoc]:
-        if mode == "bm25":
-            ranked = self.bm25.search(query, k)
-        elif mode == "vector":
-            ranked = await self._dense(query, k)
-        else:
-            sparse = [d for d, _ in self.bm25.search(query, candidates)]
-            dense = [d for d, _ in await self._dense(query, candidates)]
-            ranked = reciprocal_rank_fusion([sparse, dense])[:rerank_pool]
-            if self.reranker:
-                ranked = await self.reranker.rerank(query, [(d, self._doc_text(d)) for d, _ in ranked])
+    async def search(self, query: str, k: int = 5, candidates: int = 50, rerank_pool: int = 30) -> list[RetrievedDoc]:
+        sparse = [d for d, _ in self.bm25.search(query, candidates)]
+        dense = [d for d, _ in await self._dense(query, candidates)]
+        fused = reciprocal_rank_fusion([sparse, dense])[:rerank_pool]
+        ranked = await self.reranker.rerank(query, [(d, self._doc_text(d)) for d, _ in fused])
         return [self._to_doc(d, s, r) for r, (d, s) in enumerate(ranked[:k], start=1)]
 
     async def _dense(self, query: str, k: int) -> list[tuple[str, float]]:

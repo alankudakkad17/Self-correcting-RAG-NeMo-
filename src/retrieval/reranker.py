@@ -1,7 +1,6 @@
-"""Rerankers. Both take (query, [(doc_id, text)]) and return [(doc_id, score)] best first; ties keep input order.
+"""Reranker: NVIDIA-hosted llama-nemotron-rerank-vl-1b-v2 (text queries work). Cached like LLM calls.
 
-- LocalReranker:  ms-marco-MiniLM-L6-v2 cross-encoder on CPU. Free and deterministic.
-- HostedReranker: NVIDIA-hosted llama-nemotron-rerank-vl-1b-v2 (text queries work). Cached like LLM calls.
+Takes (query, [(doc_id, text)]) and returns [(doc_id, score)] best first; ties keep the input order.
 """
 
 import os
@@ -16,21 +15,6 @@ from src.llm import cache_key
 def _order(doc_ids: list[str], scores: list[float]) -> list[tuple[str, float]]:
     ranked = sorted(range(len(doc_ids)), key=lambda i: (-scores[i], i))
     return [(doc_ids[i], float(scores[i])) for i in ranked]
-
-
-class LocalReranker:
-
-    def __init__(self):
-        from sentence_transformers import CrossEncoder  # heavy import (torch): only when used
-        if not paths.RERANKER_DIR.exists():
-            raise FileNotFoundError(f"{paths.RERANKER_DIR} missing: run `python scripts/download_data.py` first.")
-        self._model = CrossEncoder(str(paths.RERANKER_DIR), device="cpu")
-
-    async def rerank(self, query: str, docs: list[tuple[str, str]]) -> list[tuple[str, float]]:
-        if not docs:
-            return []
-        scores = self._model.predict([(query, text) for _, text in docs], show_progress_bar=False)
-        return _order([d for d, _ in docs], [float(s) for s in scores])
 
 
 class HostedReranker:

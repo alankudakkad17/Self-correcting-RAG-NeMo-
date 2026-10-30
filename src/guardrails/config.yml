@@ -1,10 +1,9 @@
-# NeMo Guardrails config for system E (Colang 1.0). No main LLM: Guardrails runs only our rails, never generates.
-# Which flows run is chosen per call by src/guardrails/rails.py from the switches in configs/E.yml,
-# so each rail can be turned off for ablations.
+# NeMo Guardrails rail set (Colang 1.0), for reference. No main LLM: Guardrails runs only our rails, never generates.
+# At runtime src/guardrails/rails.py builds one LLMRails per stage from that stage's .co file
+# (input.co, retrieval.co, output.co, abstention.co) and the rails switched on in configs/system.yml.
 #
-# "retrieval" rails are listed under output: in nemoguardrails 0.24.1 real retrieval rails only fire inside
-# Guardrails' own knowledge-base loop (verified: a standalone call skips them). Output flows can be run by
-# name on any text, so each retrieved passage goes through the `sanitize passage` flow that way.
+# The retrieval rail runs as an output flow on each passage: in nemoguardrails 0.24.1 real retrieval rails only
+# fire inside Guardrails' own knowledge-base loop (verified: a standalone call skips them).
 colang_version: "1.0"
 models: []
 

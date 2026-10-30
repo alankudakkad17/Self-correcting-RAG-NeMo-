@@ -1,0 +1,22 @@
+# Output rails: the final answer. $report is the Controller's claims report (JSON), passed as a context variable.
+
+define bot refuse ungrounded
+  "BLOCKED: not grounded"
+
+define bot refuse citations
+  "BLOCKED: bad citations"
+
+define flow check groundedness
+  $ok = execute check_answer_grounded(text=$bot_message, report=$report)
+  if not $ok
+    bot refuse ungrounded
+    stop
+
+define flow check citation format
+  $ok = execute check_citation_format(report=$report)
+  if not $ok
+    bot refuse citations
+    stop
+
+define flow redact pii
+  $bot_message = execute redact_answer_pii(text=$bot_message)

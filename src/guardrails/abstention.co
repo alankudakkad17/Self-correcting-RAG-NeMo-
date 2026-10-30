@@ -1,0 +1,4 @@
+# Abstention rail: the retry cap was hit or an output rail blocked. Replace the bare marker with a safe explanation.
+
+define flow abstention response
+  $bot_message = "I could not find enough evidence in the documents to answer this reliably (insufficient evidence)."

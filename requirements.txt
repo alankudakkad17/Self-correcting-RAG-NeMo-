@@ -107,7 +107,6 @@ nvidia-nat==1.9.0
 nvidia-nat-atif==1.9.0
 nvidia-nat-core==1.9.0
 nvidia-nat-eval==1.9.0
-nvidia-nat-mcp==1.9.0
 nvidia-nat-profiler==1.9.0
 nvidia-nat-ragas==1.9.0
 onnxruntime==1.31.1
@@ -150,6 +149,7 @@ pywin32==312
 PyYAML==6.0.3
 ragas==0.4.3
 rank-bm25==0.2.2
+RapidFuzz==3.14.6
 referencing==0.37.0
 regex==2026.9.29
 requests==2.34.2
@@ -157,11 +157,9 @@ requests-toolbelt==1.0.0
 rich==14.3.4
 rpds-py==2026.9.1
 s3transfer==0.19.3
-safetensors==0.8.0
 scikit-learn==1.9.1
 scikit-network==0.33.5
 scipy==1.18.1
-sentence-transformers==6.2.0
 setuptools==84.2.1
 simpleeval==1.0.8
 six==1.17.0
@@ -178,9 +176,7 @@ threadpoolctl==3.7.0
 tiktoken==0.14.0
 tokenizers==0.23.3
 toolz==1.2.0
-torch==2.15.0
 tqdm==4.70.1
-transformers==5.22.0
 truststore==0.10.5
 typer==0.9.4
 typing-inspect==0.9.0

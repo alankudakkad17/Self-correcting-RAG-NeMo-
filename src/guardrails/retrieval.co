@@ -1,0 +1,5 @@
+# Retrieval rail: each retrieved passage is untrusted; instruction-like sentences are removed.
+# Run as an output flow on the passage text (see config.yml for why).
+
+define flow sanitize passage
+  $bot_message = execute sanitize_passage_text(text=$bot_message)

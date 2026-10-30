@@ -1,7 +1,0 @@
-# System H: generator alone, no retrieval.
-base: llm.yml
-
-workflow:
-  _type: llm_only_workflow
-  llm_name: generator
-  system_id: H

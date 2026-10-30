@@ -8,8 +8,12 @@ from src.state import Claim
 from src.state import Draft
 from src.state import Plan
 from src.state import RetrievedDoc
+from src.state import FactCheck
+from src.state import GuardrailEvent
 from src.state import Verdict
+from src.state import VerifyOutput
 from src.workflows.self_correcting import Controller
+from src.workflows.self_correcting import claims_report
 from src.workflows.self_correcting import decide
 from src.workflows.self_correcting import merge_round_robin
 from src.workflows.self_correcting import targeted_queries
@@ -90,12 +94,12 @@ class FakeAgents:
 
     async def verify(self, request):
         self.verify_calls.append(request)
-        return self.verdict_lists.pop(0)
+        return VerifyOutput(verdicts=self.verdict_lists.pop(0))
 
 
-def make(agents, cap=2, verify=True, planner=True):
-    return Controller(agents.research, agents.retrieve, agents.plan if planner else None,
-                      agents.verify if verify else None, retry_cap=cap, per_query_k=2, max_evidence=4, per_claim_k=2)
+def make(agents, cap=2, sanitize=None):
+    return Controller(agents.plan, agents.retrieve, agents.research, agents.verify, sanitize=sanitize, retry_cap=cap,
+                      per_query_k=2, max_evidence=4, per_claim_k=2)
 
 
 async def test_accepts_fully_supported_first_draft():
@@ -183,19 +187,30 @@ async def test_draft_without_claims_skips_verifier_and_retrieves_with_sub_questi
     assert "no supported answer" in agents.research_calls[1].feedback
 
 
-async def test_system_c_returns_first_draft_unverified():
-    agents = FakeAgents([Draft(answer="Gibson", claims=[claim(1)])])
-    state = await make(agents, verify=False).run("Q?")
-    result = to_result(state, "C")
-    assert result.answer == "Gibson" and not result.abstained
-    assert result.claims[0].label is None and state.attempts[0].verdicts == []
+async def test_retrieval_rail_sanitizes_every_passage_before_drafting():
+    async def sanitize(docs):
+        cleaned = [d.model_copy(update={"text": "clean"}) for d in docs]
+        return cleaned, [GuardrailEvent(rail="retrieval", name="sanitize passage", action="modified")]
+
+    agents = FakeAgents([Draft(answer="x", claims=[claim(1)])] * 2, [[v(1, "unsupported")], [v(1, "supported")]])
+    state = await make(agents, sanitize=sanitize).run("Q?")
+    assert all(d.text == "clean" for d in state.evidence)  # first pool and re-retrieved passages
+    assert all(d.text == "clean" for d in agents.research_calls[0].evidence)
+    assert len(state.guardrail_events) == 2  # one per retrieval round
 
 
-async def test_without_planner_retrieves_with_question_only():
-    agents = FakeAgents([Draft(answer="x", claims=[claim(1)])], [[v(1, "supported")]])
-    state = await make(agents, planner=False).run("Q?")
-    assert [q for q, _, _ in agents.retrieve_calls] == ["Q?"]
-    assert state.plan.sub_questions == ["Q?"]
+async def test_fact_checks_reach_the_result_and_report():
+    class Checked(FakeAgents):
+        async def verify(self, request):
+            return VerifyOutput(verdicts=[v(1, "supported")],
+                                fact_checks=[FactCheck(claim_id=1, title="d1", status="confirmed", score=97)])
+
+    state = await make(Checked([Draft(answer="x", claims=[claim(1)])])).run("Q?")
+    result = to_result(state, "S")
+    assert result.claims[0].wikipedia.status == "confirmed"
+    report = claims_report(state)
+    assert report["accepted"] and report["claims"][0]["label"] == "supported"
+    assert set(report["evidence_ids"]) == {d.doc_id for d in state.evidence}
 
 
 async def test_accepted_abstaining_draft_is_reported_as_abstention():

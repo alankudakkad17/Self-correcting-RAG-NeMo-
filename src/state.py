@@ -1,8 +1,7 @@
-"""Pydantic data models shared by scripts, workflows, eval and (later) the API.
+"""Pydantic data models shared by scripts, the workflow, eval and (later) the API.
 
-Milestone 2: corpus passages, eval items, retrieved docs.
-Milestone 3: plan, claims, verdicts, per-attempt trace and the Controller's run state.
-ApiResponse is added in milestone 6.
+Corpus passages and eval items; the agents' plan, claims and verdicts; Wikipedia fact checks;
+guardrail events; the Controller's per-attempt trace and run state; the final SystemResult.
 """
 
 from enum import Enum
@@ -92,8 +91,30 @@ class VerifyRequest(BaseModel):
 ANSWER_CLAIM_ID = 0  # the Verifier's extra check: "the claims together establish this answer to this question"
 
 
+FactCheckStatus = Literal["confirmed", "not_found", "page_missing", "error"]
+
+
+class FactCheck(BaseModel):
+    """Result of checking one claim's quote against the live Wikipedia article of the cited page."""
+    claim_id: int
+    title: str
+    status: FactCheckStatus
+    score: float = 0.0  # 0-100 fuzzy match of the quote in the article
+    detail: str = ""
+
+
+class FactCheckRequest(BaseModel):
+    claims: list[Claim]
+    evidence: list[RetrievedDoc]
+
+
+class FactCheckOutput(BaseModel):
+    checks: list[FactCheck]
+
+
 class VerifyOutput(BaseModel):
     verdicts: list[Verdict]
+    fact_checks: list[FactCheck] = Field(default_factory=list)
 
 
 class Action(str, Enum):
@@ -103,6 +124,14 @@ class Action(str, Enum):
     ABSTAIN = "abstain"  # retry cap reached without full support
 
 
+class GuardrailEvent(BaseModel):
+    """One guardrail decision, for the guardrail log in the UI and eval runs."""
+    rail: Literal["input", "retrieval", "output", "abstention"]
+    name: str  # the Colang flow
+    action: Literal["passed", "blocked", "modified"]
+    detail: str = ""
+
+
 class Attempt(BaseModel):
     """One pass of the loop, for the trace shown in the UI and logged in eval runs."""
     index: int
@@ -110,6 +139,7 @@ class Attempt(BaseModel):
     new_doc_ids: list[str]  # passages added to the evidence pool by those queries
     draft: Draft
     verdicts: list[Verdict] = Field(default_factory=list)
+    fact_checks: list[FactCheck] = Field(default_factory=list)
     action: Action
 
 
@@ -121,30 +151,74 @@ class RunState(BaseModel):
     evidence: list[RetrievedDoc] = Field(default_factory=list)  # deduplicated pool, in arrival order
     attempts: list[Attempt] = Field(default_factory=list)
     retries_used: int = 0
+    guardrail_events: list[GuardrailEvent] = Field(default_factory=list)  # retrieval-rail events during the loop
 
     def evidence_ids(self) -> set[str]:
         return {d.doc_id for d in self.evidence}
 
 
 class ClaimWithVerdict(Claim):
-    label: VerdictLabel | None = None  # None when the system does not verify (C)
+    label: VerdictLabel | None = None
     reason: str = ""
+    wikipedia: FactCheck | None = None  # live Wikipedia check of the quote, when it ran
 
 
 class SystemResult(BaseModel):
-    """What every system (H, A, B, C, D, ...) returns for one question."""
+    """What the system returns for one question (also the core of the API response)."""
     system: str
     answer: str
     abstained: bool
+    blocked: bool = False  # refused by an input rail before any retrieval
     retrieved: list[RetrievedDoc] = Field(default_factory=list)
-    # Filled by the self-correcting systems (C, D, ...)
     plan: Plan | None = None
     claims: list[ClaimWithVerdict] = Field(default_factory=list)
     answer_verdict: Verdict | None = None  # claim 0: do the claims establish the answer?
     attempts: list[Attempt] = Field(default_factory=list)
     retries: int = 0
+    guardrail_events: list[GuardrailEvent] = Field(default_factory=list)
 
 
 def system_result_to_str(result: SystemResult) -> str:
     """Toolkit type converter, so `nat run` / `nat serve` can print a SystemResult."""
     return result.model_dump_json(indent=2)
+
+
+# ---- API (src/api) ----
+
+
+class ApiSettings(BaseModel):
+    """Per-request overrides. Omitted fields keep the values in configs/system.yml."""
+    retry_cap: int | None = Field(default=None, ge=0, le=4)
+    rails: dict[str, bool] = Field(default_factory=dict)  # e.g. {"pii": false}; keys: GuardrailSettings fields
+    fact_check: bool | None = None  # live Wikipedia quote check in the Verifier
+
+
+class ApiRequest(BaseModel):
+    question: str = Field(min_length=3, max_length=1000)
+    settings: ApiSettings = Field(default_factory=ApiSettings)
+
+
+class ApiMetrics(BaseModel):
+    latency_s: float
+    llm_calls: int
+    cached_llm_calls: int
+    prompt_tokens: int
+    completion_tokens: int
+    retries: int
+
+
+class ApiResponse(BaseModel):
+    """Everything the UI shows for one question."""
+    question: str
+    answer: str
+    abstained: bool
+    blocked: bool
+    claims: list[ClaimWithVerdict]  # each with verdict, cited doc, quote and Wikipedia check
+    answer_verdict: Verdict | None
+    plan: Plan | None
+    attempts: list[Attempt]  # per-attempt trace: queries, new docs, draft, verdicts, Controller action
+    retrieved: list[RetrievedDoc]  # the final evidence pool (after the retrieval rail)
+    guardrail_events: list[GuardrailEvent]
+    metrics: ApiMetrics
+    settings: dict  # the effective settings this answer was produced with
+    cached_example: bool = False  # served from data/examples.json, not computed now

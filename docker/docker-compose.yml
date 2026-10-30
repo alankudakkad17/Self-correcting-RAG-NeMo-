@@ -1,0 +1,25 @@
+# Two services from one image. Only `api` gets the NVIDIA key (from ../.env); `ui` only knows the API URL.
+# Build the index on the host first (python scripts/build_index.py); data/ is mounted, not baked in.
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: uvicorn src.api.app:app --host 0.0.0.0 --port 8000
+    env_file: ../.env
+    volumes:
+      - ../data:/app/data
+    ports:
+      - "8000:8000"
+
+  ui:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: streamlit run src/ui/app.py --server.address 0.0.0.0 --server.port 8501
+    environment:
+      API_URL: http://api:8000
+    depends_on:
+      - api
+    ports:
+      - "8501:8501"

@@ -1,13 +1,12 @@
-"""Run one system over a frozen eval split and score it.
+"""Run the system over a frozen eval split and record its outputs (scored later with eval/ragas_eval.py).
 
 Usage:
-  python eval/run_eval.py --config configs/A.yml --split pilot
-  python eval/run_eval.py --config configs/B.yml --split test --limit 50
+  python eval/run_eval.py --split pilot
+  python eval/run_eval.py --split test --limit 50
 
 Writes eval/results/runs/<timestamp>_<system>_<split>/:
   run_config.json   config files, model names, data manifest hash, args
   predictions.jsonl one line per item: system output, gold, latency, LLM calls, tokens, errors
-  metrics.json      deterministic metrics (eval/metrics.py)
 Questions run one at a time to stay within the free-tier rate limit.
 """
 
@@ -27,7 +26,6 @@ from nat.data_models.intermediate_step import IntermediateStepType  # noqa: E402
 from nat.runtime.loader import load_workflow  # noqa: E402
 from nat.utils.io.yaml_tools import yaml_load  # noqa: E402
 
-from eval.metrics import summarize  # noqa: E402
 from src import paths  # noqa: E402
 from src.state import EvalItem  # noqa: E402
 from src.state import SystemResult  # noqa: E402
@@ -83,7 +81,7 @@ async def run_item(session_manager, item: EvalItem) -> dict:
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True, help="system YAML, e.g. configs/A.yml")
+    parser.add_argument("--config", default="configs/system.yml", help="system YAML")
     parser.add_argument("--split", default="pilot", choices=["pilot", "dev", "test"])
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--tag", default="", help="optional suffix for the run directory")
@@ -109,10 +107,8 @@ async def main():
                 answer = row["error"] or (row["result"] or {}).get("answer")
                 print(f"[{n}/{len(items)}] {item.item_type:<21} gold={item.answer!r:<28.28} got={answer!r:.60}")
 
-    metrics = summarize(rows)
-    (run_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
-    print(json.dumps(metrics["summary"], indent=2))
-    print(f"\nrun written to {run_dir.relative_to(ROOT)}")
+    print(f"\n{len(rows)} items, {sum(r['error'] is not None for r in rows)} errors")
+    print(f"run written to {run_dir.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":

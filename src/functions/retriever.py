@@ -1,4 +1,4 @@
-"""Retriever as a registered toolkit function: query -> top-k passages from the frozen corpus."""
+"""Retriever as a registered toolkit function: query -> top-k passages from the frozen corpus (hybrid + rerank)."""
 
 from pydantic import BaseModel
 from pydantic import Field
@@ -9,8 +9,6 @@ from nat.plugin_api import FunctionBaseConfig
 from nat.plugin_api import FunctionInfo
 from nat.plugin_api import register_function
 
-from src.retrieval.pipeline import Mode
-from src.retrieval.pipeline import RerankerKind
 from src.retrieval.pipeline import RetrievalPipeline
 from src.retrieval.vector import Embedder
 from src.state import RetrievedDoc
@@ -27,10 +25,8 @@ class RetrievalOutput(BaseModel):
 
 
 class RetrieverConfig(FunctionBaseConfig, name="corpus_retriever"):
-    """Search the frozen corpus (BM25, dense, or hybrid with RRF + reranking)."""
+    """Search the frozen corpus: BM25 + dense -> RRF -> hosted rerank."""
     embedder_name: EmbedderRef = Field(description="Entry under `embedders:` the index was built with.")
-    mode: Mode = "hybrid"
-    reranker: RerankerKind = "hosted"
     top_k: int = Field(default=5, ge=1)
     candidates: int = Field(default=50, ge=1, description="Per-retriever candidates fed into RRF.")
     rerank_pool: int = Field(default=30, ge=1, description="Fused candidates passed to the reranker.")
@@ -40,14 +36,13 @@ class RetrieverConfig(FunctionBaseConfig, name="corpus_retriever"):
 async def corpus_retriever(config: RetrieverConfig, builder: Builder):
     emb_cfg = builder.get_embedder_config(config.embedder_name)
     # Loaded once per workflow: BM25 is built in memory, FAISS index read from data/index/.
-    pipeline = RetrievalPipeline(Embedder(emb_cfg.model_name, base_url=emb_cfg.base_url),
-                                 reranker=config.reranker if config.mode == "hybrid" else "none")
+    pipeline = RetrievalPipeline(Embedder(emb_cfg.model_name, base_url=emb_cfg.base_url))
 
     async def _retrieve(request: RetrievalRequest) -> RetrievalOutput:
         """Return the top-k corpus passages for the query, skipping excluded ids."""
         k = request.top_k or config.top_k
         exclude = set(request.exclude_ids)
-        docs = await pipeline.search(request.query, config.mode, k=k + len(exclude), candidates=config.candidates,
+        docs = await pipeline.search(request.query, k=k + len(exclude), candidates=config.candidates,
                                      rerank_pool=max(config.rerank_pool, k + len(exclude)))
         docs = [d for d in docs if d.doc_id not in exclude][:k]
         for rank, d in enumerate(docs, start=1):

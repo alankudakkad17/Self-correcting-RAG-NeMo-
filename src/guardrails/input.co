@@ -1,0 +1,28 @@
+# Input rails: the question. Bot messages double as status markers (rails.py reads which flow stopped).
+
+define bot refuse injection
+  "BLOCKED: prompt injection"
+
+define bot refuse off topic
+  "BLOCKED: off topic"
+
+define bot refuse unsafe
+  "BLOCKED: unsafe request"
+
+define flow check prompt injection
+  $ok = execute check_question_injection(text=$user_message)
+  if not $ok
+    bot refuse injection
+    stop
+
+define flow check off topic
+  $ok = execute check_question_topic(text=$user_message)
+  if not $ok
+    bot refuse off topic
+    stop
+
+define flow check unsafe request
+  $ok = execute check_question_safety(text=$user_message)
+  if not $ok
+    bot refuse unsafe
+    stop

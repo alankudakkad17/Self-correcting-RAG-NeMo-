@@ -7,75 +7,83 @@ Anaconda 3.10, so use `py -3.13`.
 py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m pip install -e . --no-deps   # registers src/register.py as a toolkit plugin
-copy .env.example .env                                      # then put your key in .env
+copy .env.example .env                                      # then fill in NVIDIA_API_KEY and WIKIPEDIA_CONTACT
 ```
 
 Behind Kaspersky HTTPS scanning, add to every pip command:
 `--trusted-host pypi.org --trusted-host files.pythonhosted.org`
 
-## Milestone 1 checks
+## The system
+
+One workflow, `configs/system.yml`:
+
+input rails -> Planner -> hybrid retrieval (BM25 + FAISS -> RRF -> hosted Nemotron rerank) + retrieval rail
+-> Researcher (cited draft) -> Verifier (different model, plus claim 0 "the claims establish the answer")
++ live Wikipedia quote check -> Controller: accept / retrieve again / revise / abstain (retry cap 2)
+-> output rails (groundedness, citation format, PII) or abstention rail.
+
+Every guardrail can be switched off in `configs/system.yml`.
+
+## Build the data and index (once)
 
 ```powershell
-# Offline unit tests (no API calls)
+.\.venv\Scripts\python.exe scripts/download_data.py     # pinned HotpotQA distractor validation file (27 MB)
+.\.venv\Scripts\python.exe scripts/make_eval_sets.py    # frozen corpus + dev/test/pilot; refuses to overwrite
+.\.venv\Scripts\python.exe scripts/build_index.py       # embeds the corpus, builds data/index/ (~80 s)
+```
+
+## Run
+
+```powershell
+# One question (JSON: answer, claims with verdicts and Wikipedia checks, per-attempt trace, guardrail log)
+.\.venv\Scripts\nat.exe run --config_file configs/system.yml --input "<question>"
+
+# Unit tests (no API calls)
 .\.venv\Scripts\python.exe -m pytest -q
 
-# Config is valid and the plugin is found
-.\.venv\Scripts\nat.exe validate --config_file configs/smoke.yml
-
-# One call per configured model (generator, verifiers, judges); results -> eval/results/smoke_models.json
+# Check every configured model answers
 .\.venv\Scripts\python.exe scripts/smoke_models.py
-
-# Minimal toolkit workflow end to end
-.\.venv\Scripts\nat.exe run --config_file configs/smoke.yml --input "What is the capital of France?"
 ```
 
-Running a command a second time is served from `data/cache/llm_cache.sqlite` and uses no quota.
-Set `LLM_CACHE_ENABLED=0` to bypass the cache (needed for honest latency numbers).
-
-## Milestone 2: data, indices, baselines, evaluation
+## Demo: API + Streamlit UI
 
 ```powershell
-# 1. Download pinned sources (HotpotQA distractor validation, 27 MB; MiniLM reranker, 91 MB) into data/
-.\.venv\Scripts\python.exe scripts/download_data.py
+# once: precompute the UI's cached examples (live calls; makes the demo work offline afterwards)
+.\.venv\Scripts\python.exe scripts/make_examples.py
 
-# 2. Build the frozen corpus + dev/test/pilot sets (refuses to overwrite; the committed files are the frozen v1)
-.\.venv\Scripts\python.exe scripts/make_eval_sets.py
+# Windows, no Docker / make: API in a new window, UI here -> http://localhost:8501
+.\demo.ps1
 
-# 3. Embed the corpus and build the FAISS index (~80 s, ~112 embedding calls, cached)
-.\.venv\Scripts\python.exe scripts/build_index.py
+# or each by hand
+.\.venv\Scripts\python.exe -m uvicorn src.api.app:app --port 8000
+.\.venv\Scripts\python.exe -m streamlit run src/ui/app.py
 
-# 4. Run a system on a split (pilot = 20 dev items; never tune on test)
-.\.venv\Scripts\python.exe eval/run_eval.py --config configs/B.yml --split pilot
+# with Docker + make (after building data/index on the host)
+make demo
+```
 
-# 5. RAGAS scores for that run (judge = `judge` in configs/llm.yml)
+The API (`src/api/app.py`) holds the NVIDIA key; the UI only knows `API_URL`. `POST /ask` takes
+`{"question": ..., "settings": {"retry_cap": 0-4, "rails": {"pii": false, ...}, "fact_check": true}}` and returns
+the answer, claims with verdicts / cited quotes / Wikipedia checks, the per-attempt trace, guardrail events and
+latency / token / LLM-call counts. Rate limits come back as HTTP 429 and show as a warning in the UI.
+
+## Evaluation (RAGAS only, to be finalised)
+
+```powershell
+.\.venv\Scripts\python.exe eval/run_eval.py --split pilot             # records outputs to eval/results/runs/
 .\.venv\Scripts\python.exe eval/ragas_eval.py --run eval/results/runs/<run_dir>
 ```
-
-Systems: `configs/H.yml` (LLM only), `configs/A.yml` (dense top-5), `configs/B.yml`
-(BM25 + dense -> RRF -> hosted Nemotron rerank -> top-5). Try one question:
-`.\.venv\Scripts\nat.exe run --config_file configs/B.yml --input "<question>"`
-
-## Milestone 3: Planner, Researcher, Verifier, Controller (systems C, D)
-
-```powershell
-# Controller rules and claim parsing, with scripted fake agents (no API calls)
-.\.venv\Scripts\python.exe -m pytest tests/test_controller.py tests/test_parsing.py -q
-
-# One question through D; the JSON output includes the plan, claims with verdicts and the per-attempt trace
-.\.venv\Scripts\nat.exe run --config_file configs/D.yml --input "<question>"
-
-# Pilot (20 dev items)
-.\.venv\Scripts\python.exe eval/run_eval.py --config configs/D.yml --split pilot
-```
-
-`configs/D.yml` inherits `configs/C.yml` (`base:`) and adds the Verifier and `retry_cap` (default 2).
 
 ## Known version workarounds
 - `nvidia-nat[guardrails]` is not used: it pins `nemoguardrails<0.22`, which needs `annoy`
   (no Windows wheel). We install `nemoguardrails==0.24.1` on its own.
+- Guardrails 0.24.1 (Colang 1.0): each stage runs in its own `LLMRails` built from its own `.co` file;
+  loading all flows together made flows of other stages fire. Retrieval rails only fire inside Guardrails'
+  own knowledge-base loop, so the passage rail runs as an output flow on each passage.
 - `langchain-community` is pinned to 0.4.1: `ragas` 0.4.3 fails to import with 0.4.2.
 - `instructor` is pinned to 1.12.0: RAGAS leaves it unpinned and pip picked 0.4.0, which lacks `from_openai`.
 - LangChain and LangGraph are installed only as dependencies of RAGAS and Guardrails. Our code does not use them
   (enforced by `tests/test_no_other_orchestration.py`).
 - The toolkit's RAGAS evaluator is not used: it needs a LangChain-wrapped judge and cannot pass the embeddings
   that `AnswerRelevancy` requires. `eval/ragas_eval.py` calls RAGAS 0.4 directly.
+- Wikipedia's API returns 403 unless the User-Agent carries contact info: set `WIKIPEDIA_CONTACT` in `.env`.

@@ -1,0 +1,48 @@
+# Self-Correcting RAG: the one system.
+#   input rails -> Planner -> hybrid retrieval (+ retrieval rail) -> Researcher (cited draft)
+#   -> Verifier (different model) + live Wikipedia quote check -> Controller: accept / retrieve / revise / abstain
+#   -> output rails (groundedness, citations, PII) or abstention rail
+base: llm.yml
+
+functions:
+  retriever:
+    _type: corpus_retriever
+    embedder_name: corpus_embedder
+    top_k: 5
+    candidates: 50
+    rerank_pool: 30
+  planner:
+    _type: planner
+    llm_name: generator
+  researcher:
+    _type: researcher
+    llm_name: generator
+  fact_checker:
+    _type: wikipedia_fact_checker
+    threshold: 80          # 0-100 fuzzy match of the quote on the live Wikipedia page
+  verifier:
+    _type: verifier
+    llm_name: verifier     # nvidia/nemotron-3.5-lightning-30b-a3b; the Planner/Researcher use `generator`
+    fact_checker: fact_checker
+  guardrails:
+    _type: guardrails      # NeMo Guardrails; set any rail to false to switch it off
+    injection: true
+    off_topic: true
+    unsafe: true
+    retrieval: true
+    groundedness: true
+    citations: true
+    pii: true
+    abstention: true
+
+workflow:
+  _type: self_correcting_workflow
+  retriever: retriever
+  planner: planner
+  researcher: researcher
+  verifier: verifier
+  guardrails: guardrails
+  retry_cap: 2
+  per_query_k: 5
+  max_evidence: 10
+  per_claim_k: 3
