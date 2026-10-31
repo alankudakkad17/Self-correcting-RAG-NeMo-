@@ -203,11 +203,11 @@ async def test_fact_checks_reach_the_result_and_report():
     class Checked(FakeAgents):
         async def verify(self, request):
             return VerifyOutput(verdicts=[v(1, "supported")],
-                                fact_checks=[FactCheck(claim_id=1, title="d1", status="confirmed", score=97)])
+                                fact_checks=[FactCheck(claim_id=1, query="q", status="confirmed", score=97)])
 
     state = await make(Checked([Draft(answer="x", claims=[claim(1)])])).run("Q?")
     result = to_result(state, "S")
-    assert result.claims[0].wikipedia.status == "confirmed"
+    assert result.claims[0].web_check.status == "confirmed"
     report = claims_report(state)
     assert report["accepted"] and report["claims"][0]["label"] == "supported"
     assert set(report["evidence_ids"]) == {d.doc_id for d in state.evidence}

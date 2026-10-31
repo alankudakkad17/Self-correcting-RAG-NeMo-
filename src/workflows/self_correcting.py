@@ -1,4 +1,4 @@
-"""The system: input rails -> Planner -> retrieval (+ retrieval rail) -> Researcher -> Verifier (+ Wikipedia)
+"""The system: input rails -> Planner -> retrieval (+ retrieval rail) -> Researcher -> Verifier (+ web check)
 -> Controller loop -> output / abstention rails.
 
 The Controller is plain Python over Pydantic state. Its policy (`decide`) is a pure function, and the loop
@@ -158,7 +158,7 @@ def to_result(state: RunState, system_id: str) -> SystemResult:
     checks = {c.claim_id: c for c in last.fact_checks}
     claims = [ClaimWithVerdict(**c.model_dump(), label=labels[c.claim_id].label if c.claim_id in labels else None,
                                reason=labels[c.claim_id].reason if c.claim_id in labels else "",
-                               wikipedia=checks.get(c.claim_id))
+                               web_check=checks.get(c.claim_id))
               for c in last.draft.claims]
     if last.action == Action.ABSTAIN:
         answer, abstained = ABSTAIN_TEXT, True

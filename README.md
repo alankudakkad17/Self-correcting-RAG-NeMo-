@@ -2,7 +2,7 @@
 
 A question-answering system that answers complex, multi-hop questions **only when every claim is backed by
 evidence**. It breaks the question down, retrieves evidence with hybrid search, drafts an answer with claim-level
-citations, verifies every claim (with a different model and against live Wikipedia), and then accepts, searches
+citations, verifies every claim (with a different model and against live web search), and then accepts, searches
 again, revises or abstains. NeMo Guardrails protect the input, the retrieved text and the output.
 
 Built on the **NVIDIA NeMo Agent Toolkit** (orchestration), **NeMo Guardrails** (safety) and NVIDIA-hosted
@@ -19,7 +19,7 @@ flowchart TD
     R --> RR[Retrieval rail<br/>strip injected instructions]
     RR --> RS[Researcher<br/>short answer + claims citing passage + quote]
     RS --> V[Verifier · different model<br/>each claim + claim 0: does the answer follow?]
-    V --> W[Wikipedia check<br/>is each quote on the live page?]
+    V --> W[Web fact check · Tavily<br/>do live search results back each claim?]
     W --> C{Controller<br/>plain Python rules}
     C -- all supported --> OR{Output rails<br/>groundedness · citations · PII}
     C -- unsupported, retries left --> TQ[Targeted queries<br/>from unsupported claims] --> R
@@ -50,9 +50,9 @@ same name) and the system answered unanswerable questions.
 | Planner, Researcher | `nvidia/nemotron-3.5-super-vl-120b-a12b` (thinking off, temperature 0) |
 | Verifier | `nvidia/nemotron-3.5-lightning-30b-a3b`, a different model from the Researcher |
 | Retrieval | BM25 (`rank_bm25`) + FAISS over `nvidia/nemotron-3.5-embed-1b`, reciprocal rank fusion, `nvidia/llama-nemotron-rerank-vl-1b-v2` |
-| Fact check | Wikipedia MediaWiki API: the claim's quote is fuzzy-matched (`rapidfuzz`) on the cited page's live article |
-| Safety | NeMo Guardrails 0.24.1, Colang 1.0: input, retrieval, output and abstention rails, each switchable |
-| Caching | every LLM, embedding, rerank, judge and Wikipedia call cached on disk by hash of (model, prompt, params) |
+| Fact check | Tavily Search API: each supported claim is searched on the live web and fuzzy-matched (`rapidfuzz`) against the results; the matching source URL is kept |
+| Safety | NeMo Guardrails 0.24.1, Colang 1.0: input, retrieval, output and abstention rails, each switchable. Guardrails runs the flows; the checks inside them are deterministic Python rules |
+| Caching | every LLM, embedding, rerank, judge and web-search call cached on disk by hash of (model or query, prompt, params) |
 | API / UI | FastAPI service; Streamlit UI that talks only to the API (the NVIDIA key never reaches the UI) |
 | Evaluation | RAGAS 0.4 with `nvidia/nemotron-3-ultra-550b-a55b` as a fixed judge (separate from the system's models) |
 
@@ -64,7 +64,7 @@ Full setup, including Windows-specific notes: [setup.md](setup.md).
 py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m pip install -e . --no-deps
-copy .env.example .env          # NVIDIA_API_KEY, WIKIPEDIA_CONTACT
+copy .env.example .env          # NVIDIA_API_KEY, TAVILY_API_KEY
 .\.venv\Scripts\python.exe scripts/download_data.py
 .\.venv\Scripts\python.exe scripts/build_index.py
 .\demo.ps1                      # API on :8000, UI on :8501   (or: make demo, with Docker)
@@ -84,7 +84,7 @@ POST /ask
 ```
 
 The response carries the answer, an abstained / blocked flag, each claim with its verdict, cited passage, quote and
-Wikipedia result, the per-attempt loop trace (plan, queries, new passages, verdicts, Controller action), the
+web check (with the source URL), the per-attempt loop trace (plan, queries, new passages, verdicts, Controller action), the
 guardrail log, and latency, token and LLM-call counts.
 
 ## Screenshots
@@ -126,9 +126,12 @@ passages and 15 injected questions caught, plus 5 injection phrasings that are n
   generalise to some new phrasings but will miss creative attacks. The dataset's injection templates were written
   by the same project, so injection results will look better than real-world robustness. A hosted NemoGuard
   content-safety model works with the API key but is not wired in; the topic-control model returned errors.
-- **Wikipedia has changed since HotpotQA's 2017 snapshot.** A correct quote may no longer be on the live page, which
-  turns a supported claim into an unsupported one and can cause extra abstentions. Lookups need network access and a
-  `WIKIPEDIA_CONTACT` (Wikimedia returns 403 without one). If Wikipedia is unreachable, the model's verdict stands.
+- **The web check is approximate.** It fuzzy-matches the claim against search snippets, so a true claim worded
+  differently from every result is "not confirmed" and downgraded, which can cause extra abstentions; a snippet that
+  merely repeats the claim's words confirms it. Web sources vary in quality, and HotpotQA's facts date from 2017,
+  so the live web may disagree. Search needs network access, a `TAVILY_API_KEY` and free-tier credits (1 per
+  claim checked); if Tavily is unavailable, the model's verdict stands. Results are cached, so a repeated question
+  reuses the first search; set `cache: false` for fresh results.
 - **The Verifier is itself an LLM** and can be wrong both ways. Claim 0's wording was tuned on 20 dev questions;
   it trades some correct answers for fewer wrong ones.
 - **Hosted models can change.** Models are pinned by name only, and the Verifier model is a preview release.
@@ -154,10 +157,10 @@ src/
   retrieval/    bm25, vector (FAISS), fusion (RRF), reranker
   api/          FastAPI app and workflow runner
   ui/           Streamlit app, API client, rendering helpers
-  llm.py        cached NVIDIA client + profiler hooks;  wikipedia.py  live lookups;  state.py  Pydantic models
+  llm.py        cached NVIDIA client + profiler hooks;  websearch.py  Tavily search;  state.py  Pydantic models
 eval/           run_eval.py (record outputs), ragas_eval.py (score them)
 scripts/        download_data, make_eval_sets, build_index, make_examples, smoke_models
-tests/          107 unit tests, no API calls
+tests/          109 unit tests, no API calls
 docker/         Dockerfile, docker-compose.yml
 ```
 

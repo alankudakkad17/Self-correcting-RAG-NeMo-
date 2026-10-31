@@ -9,7 +9,7 @@ openai==1.109.1
 # ragas leaves instructor unpinned and pip resolved 0.4.0 (no from_openai). 1.12.0 is the newest that accepts openai 1.x.
 instructor==1.12.0
 faiss-cpu==1.15.1
-# Fuzzy quote matching for the Wikipedia fact check
+# Fuzzy matching of claims against web results in the Tavily fact check
 rapidfuzz==3.14.6
 python-dotenv==1.2.4
 streamlit==1.66.1

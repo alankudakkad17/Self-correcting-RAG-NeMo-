@@ -7,8 +7,8 @@ import re
 from rapidfuzz import fuzz
 
 VERDICT_COLORS = {"supported": "green", "unsupported": "orange", "contradicted": "red", None: "gray"}
-WIKI_LABELS = {"confirmed": "Wikipedia: confirmed", "not_found": "Wikipedia: quote not found",
-               "page_missing": "Wikipedia: no such page", "error": "Wikipedia: check failed", None: "Wikipedia: not checked"}
+WEB_LABELS = {"confirmed": "Web: confirmed", "not_found": "Web: not confirmed", "no_results": "Web: no results",
+              "error": "Web: check failed", None: "Web: not checked"}
 
 _MD_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|>~:$<])")
 
@@ -53,6 +53,10 @@ def answer_with_citations(answer: str, claims: list[dict]) -> str:
 
 def claim_rows(claims: list[dict]) -> list[dict]:
     """Rows for the claims table."""
-    return [{"#": i, "claim": c["text"], "verdict": c.get("label") or "not verified", "source": c["doc_id"],
-             "wikipedia": WIKI_LABELS.get((c.get("wikipedia") or {}).get("status")), "reason": c.get("reason", "")}
-            for i, c in enumerate(claims, start=1)]
+    rows = []
+    for i, c in enumerate(claims, start=1):
+        check = c.get("web_check") or {}
+        rows.append({"#": i, "claim": c["text"], "verdict": c.get("label") or "not verified", "source": c["doc_id"],
+                     "web check": WEB_LABELS.get(check.get("status")), "web source": check.get("url", ""),
+                     "reason": c.get("reason", "")})
+    return rows

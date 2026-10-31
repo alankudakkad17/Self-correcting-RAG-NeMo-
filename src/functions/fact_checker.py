@@ -1,11 +1,12 @@
-"""Wikipedia fact checker: is each claim's quote present on the live Wikipedia page of the passage it cites?
+"""Web fact checker (Tavily): do live web search results back each claim?
 
-Corpus passages are Wikipedia paragraphs, so the cited passage's title is a Wikipedia title.
-- confirmed:    quote found (fuzzy score >= threshold)
-- not_found:    page exists but the quote is not on it
-- page_missing: no such Wikipedia page (e.g. a fabricated or poisoned "archived copy" passage)
-- error:        Wikipedia unreachable; the Verifier keeps the model's verdict and records the error
-Deterministic apart from the live page content, which is cached on first fetch.
+For every claim the Verifier marked supported, search the web with the claim's text and fuzzy-match the claim
+(and its quote) against the result titles and snippets.
+- confirmed:  a result matches (score >= threshold); its URL is recorded as the web source
+- not_found:  results came back but none matches the claim
+- no_results: the search returned nothing
+- error:      Tavily unreachable, key missing or credits exhausted; the Verifier keeps the model's verdict
+Results are cached (see src/websearch.py), so repeated questions cost no credits.
 """
 
 import asyncio
@@ -21,41 +22,43 @@ from src.state import Claim
 from src.state import FactCheck
 from src.state import FactCheckOutput
 from src.state import FactCheckRequest
-from src.wikipedia import WikipediaClient
-from src.wikipedia import quote_match_score
+from src.websearch import TavilyClient
+from src.websearch import best_match
 
 
-async def check_claim(wiki: WikipediaClient, claim: Claim, title: str, threshold: float) -> FactCheck:
+async def check_claim(search: TavilyClient, claim: Claim, threshold: float) -> FactCheck:
+    query = claim.text
     try:
-        article = await wiki.article_text(title)
-    except Exception as e:  # network / HTTP failure: report it, do not guess
-        return FactCheck(claim_id=claim.claim_id, title=title, status="error", detail=f"{type(e).__name__}: {e}"[:200])
-    if article is None:
-        return FactCheck(claim_id=claim.claim_id, title=title, status="page_missing",
-                         detail=f"no Wikipedia page titled {title!r}")
-    score = quote_match_score(claim.quote or claim.text, article)
-    status = "confirmed" if score >= threshold else "not_found"
-    return FactCheck(claim_id=claim.claim_id, title=title, status=status, score=score,
-                     detail="" if status == "confirmed" else f"quote not found on the live page (best match {score:.0f})")
+        results = await search.search(query)
+    except Exception as e:  # network, key or credit failure: report it, do not guess
+        return FactCheck(claim_id=claim.claim_id, query=query, status="error", detail=f"{type(e).__name__}: {e}"[:200])
+    if not results:
+        return FactCheck(claim_id=claim.claim_id, query=query, status="no_results", detail="the web search found nothing")
+    score, best = best_match(claim.text, claim.quote, results)
+    if score >= threshold:
+        return FactCheck(claim_id=claim.claim_id, query=query, status="confirmed", score=score, url=best["url"] or "",
+                         source_title=best["title"] or "")
+    return FactCheck(claim_id=claim.claim_id, query=query, status="not_found", score=score,
+                     detail=f"no web result matches the claim (best match {score:.0f})")
 
 
-class FactCheckerConfig(FunctionBaseConfig, name="wikipedia_fact_checker"):
-    """Check claim quotes against live Wikipedia."""
+class FactCheckerConfig(FunctionBaseConfig, name="tavily_fact_checker"):
+    """Check claims against live web search results (Tavily)."""
     threshold: float = Field(default=80.0, ge=0, le=100, description="Minimum fuzzy match score (0-100).")
-    timeout_s: float = Field(default=20.0, gt=0)
+    max_results: int = Field(default=5, ge=1, le=20)
+    search_depth: str = Field(default="basic", description="basic (1 credit) or advanced (2 credits)")
+    cache: bool = Field(default=True, description="false = fresh search results every time (spends credits)")
+    timeout_s: float = Field(default=30.0, gt=0)
 
 
 @register_function(config_type=FactCheckerConfig)
-async def wikipedia_fact_checker(config: FactCheckerConfig, builder: Builder):
-    wiki = WikipediaClient(timeout=config.timeout_s)
+async def tavily_fact_checker(config: FactCheckerConfig, builder: Builder):
+    search = TavilyClient(search_depth=config.search_depth, max_results=config.max_results, timeout=config.timeout_s,
+                          cache=config.cache)
 
     async def _check(request: FactCheckRequest) -> FactCheckOutput:
-        """Check every claim's quote on the Wikipedia page of its cited passage."""
-        titles = {d.doc_id: d.title for d in request.evidence}
-        checks = await asyncio.gather(*[
-            check_claim(wiki, c, titles.get(c.doc_id, c.doc_id.replace("_", " ")), config.threshold)
-            for c in request.claims
-        ])
+        """Check every claim against live web search results."""
+        checks = await asyncio.gather(*[check_claim(search, c, config.threshold) for c in request.claims])
         return FactCheckOutput(checks=list(checks))
 
     yield FunctionInfo.from_fn(_check, description=_check.__doc__)

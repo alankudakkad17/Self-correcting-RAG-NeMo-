@@ -1,6 +1,6 @@
 """Pydantic data models shared by scripts, the workflow, eval and (later) the API.
 
-Corpus passages and eval items; the agents' plan, claims and verdicts; Wikipedia fact checks;
+Corpus passages and eval items; the agents' plan, claims and verdicts; web fact checks;
 guardrail events; the Controller's per-attempt trace and run state; the final SystemResult.
 """
 
@@ -91,15 +91,17 @@ class VerifyRequest(BaseModel):
 ANSWER_CLAIM_ID = 0  # the Verifier's extra check: "the claims together establish this answer to this question"
 
 
-FactCheckStatus = Literal["confirmed", "not_found", "page_missing", "error"]
+FactCheckStatus = Literal["confirmed", "not_found", "no_results", "error"]
 
 
 class FactCheck(BaseModel):
-    """Result of checking one claim's quote against the live Wikipedia article of the cited page."""
+    """Result of checking one claim against live web search results (Tavily)."""
     claim_id: int
-    title: str
+    query: str
     status: FactCheckStatus
-    score: float = 0.0  # 0-100 fuzzy match of the quote in the article
+    score: float = 0.0  # 0-100 best fuzzy match of the claim / quote in a result
+    url: str = ""  # the best-matching web source
+    source_title: str = ""
     detail: str = ""
 
 
@@ -160,7 +162,7 @@ class RunState(BaseModel):
 class ClaimWithVerdict(Claim):
     label: VerdictLabel | None = None
     reason: str = ""
-    wikipedia: FactCheck | None = None  # live Wikipedia check of the quote, when it ran
+    web_check: FactCheck | None = None  # live web (Tavily) check of the claim, when it ran
 
 
 class SystemResult(BaseModel):
@@ -190,7 +192,7 @@ class ApiSettings(BaseModel):
     """Per-request overrides. Omitted fields keep the values in configs/system.yml."""
     retry_cap: int | None = Field(default=None, ge=0, le=4)
     rails: dict[str, bool] = Field(default_factory=dict)  # e.g. {"pii": false}; keys: GuardrailSettings fields
-    fact_check: bool | None = None  # live Wikipedia quote check in the Verifier
+    fact_check: bool | None = None  # live web (Tavily) check in the Verifier
 
 
 class ApiRequest(BaseModel):
@@ -213,7 +215,7 @@ class ApiResponse(BaseModel):
     answer: str
     abstained: bool
     blocked: bool
-    claims: list[ClaimWithVerdict]  # each with verdict, cited doc, quote and Wikipedia check
+    claims: list[ClaimWithVerdict]  # each with verdict, cited doc, quote and web check
     answer_verdict: Verdict | None
     plan: Plan | None
     attempts: list[Attempt]  # per-attempt trace: queries, new docs, draft, verdicts, Controller action

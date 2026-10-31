@@ -1,6 +1,6 @@
 """Runs the toolkit workflow for the API, with per-request overrides.
 
-Overrides (retry cap, guardrails on/off, Wikipedia check on/off) change the workflow config, so each distinct
+Overrides (retry cap, guardrails on/off, web fact check on/off) change the workflow config, so each distinct
 set of overrides gets its own loaded workflow: the merged YAML is written to data/cache/api_configs/<hash>.yml
 and loaded with the toolkit's load_workflow. The few most recent variants stay loaded.
 """

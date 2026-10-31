@@ -1,4 +1,4 @@
-"""Verifier: label each claim supported / unsupported / contradicted, then fact-check quotes on live Wikipedia.
+"""Verifier: label each claim supported / unsupported / contradicted, then fact-check claims on the live web.
 
 Uses a different model than the Researcher (see configs/system.yml). One LLM call per draft:
 - every drafted claim against the passage it cites, and
@@ -6,8 +6,8 @@ Uses a different model than the Researcher (see configs/system.yml). One LLM cal
   but irrelevant claims (a similarly named entity, a missing hop) passes claim-by-claim checking.
 Deterministic steps around the LLM:
 - before: a claim citing a passage that is not in the evidence pool is "unsupported" without asking the model;
-- after:  a "supported" claim whose quote is not on the cited page's live Wikipedia article is downgraded to
-          "unsupported" (see apply_fact_checks). Wikipedia errors leave the model's verdict unchanged.
+- after:  a "supported" claim that live web search results (Tavily) do not back is downgraded to
+          "unsupported" (see apply_fact_checks). Search errors leave the model's verdict unchanged.
 """
 
 from nat.plugin_api import Builder
@@ -33,22 +33,21 @@ from src.state import VerifyRequest
 
 
 def apply_fact_checks(verdicts: list[Verdict], checks: list[FactCheck]) -> list[Verdict]:
-    """Downgrade "supported" claims that Wikipedia does not back. Other labels are left as they are."""
+    """Downgrade "supported" claims that the web search does not back. Other labels are left as they are."""
     by_claim = {c.claim_id: c for c in checks}
     out = []
     for v in verdicts:
         check = by_claim.get(v.claim_id)
-        if v.label == "supported" and check and check.status in ("not_found", "page_missing"):
-            v = Verdict(claim_id=v.claim_id, label="unsupported",
-                        reason=f"Wikipedia check failed for {check.title!r}: {check.detail}")
+        if v.label == "supported" and check and check.status in ("not_found", "no_results"):
+            v = Verdict(claim_id=v.claim_id, label="unsupported", reason=f"Web check failed: {check.detail}")
         out.append(v)
     return out
 
 
 class VerifierConfig(FunctionBaseConfig, name="verifier"):
-    """Check every claim against the passages it cites, the answer against the claims, and quotes on Wikipedia."""
+    """Check every claim against the passages it cites, the answer against the claims, and claims on the web."""
     llm_name: LLMRef
-    fact_checker: FunctionRef | None = None  # a `wikipedia_fact_checker` entry; omit to skip the Wikipedia check
+    fact_checker: FunctionRef | None = None  # a `tavily_fact_checker` entry; omit to skip the web check
 
 
 @register_function(config_type=VerifierConfig)

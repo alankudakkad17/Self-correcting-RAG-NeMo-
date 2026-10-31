@@ -16,7 +16,7 @@ from src.ui.client import ApiClient  # noqa: E402
 from src.ui.client import ApiError  # noqa: E402
 from src.ui.client import RateLimited  # noqa: E402
 from src.ui.components.render import VERDICT_COLORS  # noqa: E402
-from src.ui.components.render import WIKI_LABELS  # noqa: E402
+from src.ui.components.render import WEB_LABELS  # noqa: E402
 from src.ui.components.render import answer_with_citations  # noqa: E402
 from src.ui.components.render import claim_rows  # noqa: E402
 from src.ui.components.render import escape_md  # noqa: E402
@@ -53,7 +53,7 @@ with st.sidebar:
 
     st.subheader("Settings")
     retry_cap = st.slider("Retry cap", 0, 4, 2, help="Re-retrieve / revise rounds before abstaining")
-    fact_check = st.toggle("Wikipedia fact check", value=True)
+    fact_check = st.toggle("Web fact check (Tavily)", value=True)
     with st.expander("Guardrails"):
         rails = {key: st.toggle(label, value=True, key=f"rail_{key}") for key, label in RAIL_LABELS.items()}
 
@@ -67,7 +67,7 @@ with st.sidebar:
 
 st.title("Self-Correcting RAG")
 st.caption("Answers only when every claim is backed by evidence: plan, retrieve, draft with citations, verify "
-           "(different model + live Wikipedia), then accept, retry, revise or abstain.")
+           "(different model + live web search), then accept, retry, revise or abstain.")
 
 default_question = examples[picked - 1]["question"] if picked else ""
 question = st.text_area("Question", value=default_question, height=80)
@@ -131,8 +131,11 @@ with tab_evidence:
         idx = st.selectbox("Claim", range(len(response["claims"])),
                            format_func=lambda i: f"[{i + 1}] {response['claims'][i]['text'][:90]}")
         c = response["claims"][idx]
-        st.markdown(f"{verdict_badge(c.get('label'))} cites **{escape_md(c['doc_id'])}** Â· "
-                    f"{escape_md(WIKI_LABELS.get((c.get('wikipedia') or {}).get('status')))}")
+        check = c.get("web_check") or {}
+        st.markdown(f"{verdict_badge(c.get('label'))} cites **{escape_md(c['doc_id'])}** · "
+                    f"{escape_md(WEB_LABELS.get(check.get('status')))}")
+        if check.get("url"):
+            st.caption(f"Web source: {escape_md(check.get('source_title') or '')} {escape_md(check['url'])}")
         doc = docs.get(c["doc_id"])
         if doc:
             st.markdown(f"**{escape_md(doc['title'])}**")

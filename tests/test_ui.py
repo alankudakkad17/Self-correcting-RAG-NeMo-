@@ -68,9 +68,10 @@ def test_quote_is_found_exactly_or_fuzzily_and_highlighted():
 
 
 def test_claim_rows_and_citation_markers():
-    claims = [{"text": "A", "doc_id": "D1", "label": "supported", "wikipedia": {"status": "confirmed"}},
-              {"text": "B", "doc_id": "D2", "label": None, "wikipedia": None}]
+    claims = [{"text": "A", "doc_id": "D1", "label": "supported", "web_check": {"status": "confirmed", "url": "https://s"}},
+              {"text": "B", "doc_id": "D2", "label": None, "web_check": None}]
     rows = claim_rows(claims)
-    assert rows[0]["wikipedia"] == "Wikipedia: confirmed" and rows[1]["verdict"] == "not verified"
-    assert rows[1]["wikipedia"] == "Wikipedia: not checked"
+    assert rows[0]["web check"] == "Web: confirmed" and rows[0]["web source"] == "https://s"
+    assert rows[1]["verdict"] == "not verified"
+    assert rows[1]["web check"] == "Web: not checked"
     assert answer_with_citations("Paris", claims) == r"Paris \[1\]\[2\]"
