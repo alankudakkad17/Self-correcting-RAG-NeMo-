@@ -52,3 +52,36 @@ def test_agent_prompt_names_the_tools_and_includes_passages():
     prompt = agent_research_prompt("Who was Ed Wood?", [doc], ["Who is Ed Wood?"], "")
     assert "corpus_search" in prompt and "web_search" in prompt
     assert "[Ed_Wood] Ed Wood: Film maker." in prompt and "Question: Who was Ed Wood?" in prompt
+
+
+def test_corpus_only_prompt_never_mentions_web_search():
+    doc = RetrievedDoc(doc_id="Ed_Wood", title="Ed Wood", text="Film maker.", score=1, rank=1)
+    prompt = agent_research_prompt("Who won the 2022 World Cup?", [doc], web_search=False)
+    assert "web_search" not in prompt and "no web access" in prompt
+    assert "web_search" in agent_research_prompt("Q?", [doc], web_search=True)
+
+
+class FakeBuilder:
+    """Minimal stand-in for the toolkit builder's get_function_config."""
+
+    def __init__(self, configs):
+        self.configs = configs
+
+    def get_function_config(self, name):
+        if name not in self.configs:
+            raise ValueError(f"unknown function {name}")
+        return self.configs[name]
+
+
+def test_web_search_is_detected_from_the_agent_tool_list():
+    from types import SimpleNamespace
+
+    from src.functions.agentic_researcher import has_web_search
+    from src.functions.search_tools import CorpusSearchToolConfig
+    from src.functions.search_tools import WebSearchToolConfig
+
+    tools = {"corpus_search": CorpusSearchToolConfig(retriever="retriever"), "web_search": WebSearchToolConfig()}
+    with_web = FakeBuilder({**tools, "agent": SimpleNamespace(tool_names=["corpus_search", "web_search"])})
+    without = FakeBuilder({**tools, "agent": SimpleNamespace(tool_names=["corpus_search", "some_group"])})
+    assert has_web_search(with_web, "agent") is True
+    assert has_web_search(without, "agent") is False  # unknown names (e.g. groups) are skipped

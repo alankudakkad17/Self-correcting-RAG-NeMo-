@@ -48,7 +48,7 @@ same name) and the system answered unanswerable questions.
 | Part | Implementation |
 |---|---|
 | Orchestration | NeMo Agent Toolkit 1.9.0: every component is a registered toolkit function wired in toolkit YAML; the Controller is a custom workflow function |
-| Researcher agent | The toolkit's built-in **ReAct agent** (`_type: react_agent`, native tool calling, budget of 4 tool calls per draft) with two registered tool functions, `corpus_search` and `web_search` (Tavily). Passages it finds join the evidence pool, so the Verifier checks their citations |
+| Researcher agent | The toolkit's built-in **ReAct agent** (`_type: react_agent`, native tool calling, budget of 4 tool calls per draft) with two registered tool functions, `corpus_search` and `web_search` (Tavily). Passages it finds join the evidence pool, so the Verifier checks their citations. Removing `web_search` from its tools (`configs/corpus_only.yml`, or the API / UI switch) gives corpus-only answers |
 | Planner, Researcher model | `nvidia/nemotron-3.5-super-vl-120b-a12b` (thinking off, temperature 0) |
 | Verifier | `nvidia/nemotron-3.5-lightning-30b-a3b`, a different model from the Researcher |
 | Retrieval | BM25 (`rank_bm25`) + FAISS over `nvidia/nemotron-3.5-embed-1b`, reciprocal rank fusion, `nvidia/llama-nemotron-rerank-vl-1b-v2` |
@@ -141,7 +141,9 @@ passages and 15 injected questions caught, plus 5 injection phrasings that are n
 - **The ReAct Researcher is an LLM agent.** How often it searches, and what for, varies by question; a budget of 4
   tool calls per draft and the Controller's retry cap bound it. Its LLM calls go through the toolkit's LangChain
   client, so they use LangChain's cache rather than ours. Passages it finds on the web can be cited, and the web
-  check then partly checks the web against itself.
+  check then partly checks the web against itself. With web search on, questions outside the corpus get answered
+  from the web (e.g. "Which country won the 2022 FIFA World Cup?" -> Argentina, citing Wikipedia), so the eval
+  set's "unanswerable" items stop testing abstention; benchmarks run with `configs/corpus_only.yml`.
 - **The Verifier is itself an LLM** and can be wrong both ways. Claim 0's wording was tuned on 20 dev questions;
   it trades some correct answers for fewer wrong ones.
 - **Hosted models can change.** Models are pinned by name only, and the Verifier model is a preview release.
@@ -162,7 +164,7 @@ passages and 15 injected questions caught, plus 5 injection phrasings that are n
 ## Project layout
 
 ```
-configs/        system.yml (the system), llm.yml (models), smoke.yml (connectivity check)
+configs/        system.yml (the system), corpus_only.yml (no agent web search), llm.yml (models), smoke.yml
 data/           eval/ frozen sets + manifest, processed/ corpus; raw/, index/, cache/ are git-ignored
 src/
   functions/    planner, agentic_researcher (ReAct), researcher (plain), search_tools, verifier, fact_checker,
@@ -175,7 +177,7 @@ src/
   llm.py        cached NVIDIA client + profiler hooks;  websearch.py  Tavily search;  state.py  Pydantic models
 eval/           run_eval.py (record outputs), ragas_eval.py (score them)
 scripts/        download_data, make_eval_sets, build_index, smoke_models
-tests/          120 unit tests, no API calls
+tests/          124 unit tests, no API calls
 docker/         Dockerfile, docker-compose.yml
 ```
 

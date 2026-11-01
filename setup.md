@@ -78,6 +78,11 @@ with two tools, `corpus_search` and `web_search`. It comes from the toolkit's La
 (`nvidia-nat-langchain[nvidia]`, in requirements.txt). To use the plain single-call Researcher instead, set
 `researcher: {_type: researcher, llm_name: generator}`.
 
+**Web search on or off.** With `web_search` in the agent's `tool_names`, questions the corpus cannot answer may be
+answered from the web. `configs/corpus_only.yml` removes it, so answers come only from the corpus and uncovered
+questions get "insufficient evidence"; the eval harness uses it by default. Per request: the API's
+`"settings": {"web_search": false}`, or the UI's "Agent web search" toggle.
+
 ## Known version workarounds
 - `nvidia-nat[guardrails]` is not used: it pins `nemoguardrails<0.22`, which needs `annoy`
   (no Windows wheel). We install `nemoguardrails==0.24.1` on its own.

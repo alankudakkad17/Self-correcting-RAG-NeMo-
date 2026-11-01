@@ -16,7 +16,8 @@ from src.state import ApiSettings
 
 BASE = {"workflow": {"retry_cap": 2},
         "functions": {"verifier": {"llm_name": "verifier", "fact_checker": "fact_checker"},
-                      "guardrails": {"injection": True, "pii": True}}}
+                      "guardrails": {"injection": True, "pii": True},
+                      "research_agent": {"_type": "react_agent", "tool_names": ["corpus_search", "web_search"]}}}
 
 
 def test_build_config_applies_overrides_without_touching_the_base():
@@ -30,12 +31,30 @@ def test_build_config_applies_overrides_without_touching_the_base():
 
 def test_build_config_defaults_and_unknown_rail():
     _, effective = build_config(ApiSettings(), base=BASE)
-    assert effective == {"retry_cap": 2, "fact_check": True,
+    assert effective == {"retry_cap": 2, "fact_check": True, "web_search": True,
                          "rails": {r: True for r in effective["rails"]}}
     assert set(effective["rails"]) == {"injection", "off_topic", "unsafe", "retrieval", "groundedness", "citations",
                                        "pii", "abstention"}
     with pytest.raises(UnknownRailError):
         build_config(ApiSettings(rails={"telepathy": True}), base=BASE)
+
+
+def test_web_search_switch_edits_the_agent_tool_list():
+    config, effective = build_config(ApiSettings(web_search=False), base=BASE)
+    assert config["functions"]["research_agent"]["tool_names"] == ["corpus_search"]
+    assert effective["web_search"] is False
+    assert BASE["functions"]["research_agent"]["tool_names"] == ["corpus_search", "web_search"]  # base untouched
+    off = {**BASE, "functions": {**BASE["functions"],
+                                 "research_agent": {"_type": "react_agent", "tool_names": ["corpus_search"]}}}
+    config, effective = build_config(ApiSettings(web_search=True), base=off)
+    assert config["functions"]["research_agent"]["tool_names"] == ["corpus_search", "web_search"]
+    assert effective["web_search"] is True
+
+
+def test_web_search_is_off_without_the_react_agent():
+    plain = {**BASE, "functions": {k: v for k, v in BASE["functions"].items() if k != "research_agent"}}
+    _, effective = build_config(ApiSettings(web_search=True), base=plain)
+    assert effective["web_search"] is False
 
 
 def test_request_validation():

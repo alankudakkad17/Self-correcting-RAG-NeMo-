@@ -45,6 +45,9 @@ with st.sidebar:
 
     st.subheader("Settings")
     retry_cap = st.slider("Retry cap", 0, 4, 2, help="Re-retrieve / revise rounds before abstaining")
+    web_search = st.toggle("Agent web search", value=True,
+                           help="Off = corpus-only: answers come only from the document collection, and questions "
+                                "it does not cover get 'insufficient evidence'.")
     fact_check = st.toggle("Web fact check (Tavily)", value=True)
     with st.expander("Guardrails"):
         rails = {key: st.toggle(label, value=True, key=f"rail_{key}") for key, label in RAIL_LABELS.items()}
@@ -59,7 +62,7 @@ question = st.text_area("Question", height=80)
 ask_clicked = st.button("Ask", type="primary", disabled=not question.strip())
 
 if ask_clicked:
-    settings = {"retry_cap": retry_cap, "fact_check": fact_check, "rails": rails}
+    settings = {"retry_cap": retry_cap, "fact_check": fact_check, "web_search": web_search, "rails": rails}
     with st.spinner("Planning, retrieving, drafting and verifying..."):
         try:
             st.session_state["response"] = client.ask(question, settings)

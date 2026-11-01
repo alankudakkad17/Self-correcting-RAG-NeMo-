@@ -201,6 +201,7 @@ class ApiSettings(BaseModel):
     retry_cap: int | None = Field(default=None, ge=0, le=4)
     rails: dict[str, bool] = Field(default_factory=dict)  # e.g. {"pii": false}; keys: GuardrailSettings fields
     fact_check: bool | None = None  # live web (Tavily) check in the Verifier
+    web_search: bool | None = None  # the ReAct Researcher may search the web; false = corpus-only answers
 
 
 class ApiRequest(BaseModel):

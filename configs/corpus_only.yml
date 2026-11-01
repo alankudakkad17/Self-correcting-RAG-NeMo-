@@ -1,0 +1,8 @@
+# The system without agent web search: answers come only from the frozen corpus.
+# Use it for the benchmark, so the eval set's "unanswerable" questions still test abstention.
+# (The web fact check stays on: it can only reject claims, never supply an answer.)
+base: system.yml
+
+functions:
+  research_agent:
+    tool_names: [corpus_search]
