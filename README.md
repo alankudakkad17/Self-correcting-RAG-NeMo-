@@ -8,6 +8,17 @@ again, revises or abstains. NeMo Guardrails protect the input, the retrieved tex
 Built on the **NVIDIA NeMo Agent Toolkit** (orchestration), **NeMo Guardrails** (safety) and NVIDIA-hosted
 **Nemotron** models.
 
+![A verified answer: the stamp, the answer with citations, and the cited claims](docs/screenshots/verified-answer.jpg)
+
+## Built on the NVIDIA agentic stack
+
+| NVIDIA component | What it does here |
+|---|---|
+| **NeMo Agent Toolkit** 1.9.0 | Orchestrates everything. Each component (planner, retriever, search tools, verifier, fact checker, guardrails) is a registered toolkit function, wired together in toolkit YAML (`configs/system.yml`). The Controller is a custom toolkit workflow; the Researcher is the toolkit's built-in **ReAct agent**. Runs with `nat run`, validated with `nat validate`; every LLM call is reported to the toolkit profiler |
+| **Nemotron** via **NVIDIA NIM** API endpoints | `nemotron-3.5-super-vl-120b-a12b` plans and drafts; `nemotron-3.5-lightning-30b-a3b`, a different model, verifies claims and judges web results; `nemotron-3-ultra-550b-a55b` is the evaluation judge |
+| **NeMo Retriever** models | `nemotron-3.5-embed-1b` embeds the corpus and uploaded documents; `llama-nemotron-rerank-vl-1b-v2` reranks the fused search results |
+| **NeMo Guardrails** 0.24.1 | Input, retrieval, output and abstention rails (Colang 1.0), each switchable per request |
+
 ## How it works
 
 ```mermaid
@@ -31,6 +42,30 @@ flowchart TD
     OR -- blocked --> AB
 ```
 
+### The methods, step by step
+
+1. **Planning.** Nemotron Super breaks a multi-hop question ("Which brand did the band led by Ann and Nancy Wilson
+   endorse?") into 1 to 4 sub-questions that can each be looked up on their own.
+2. **Hybrid retrieval.** For the question and every sub-question, keyword search (BM25) and meaning search
+   (Nemotron embeddings in a FAISS index) each return candidates. Reciprocal Rank Fusion merges the two rankings,
+   and the Nemotron reranker reads each candidate against the query to pick the best 5. Relevant chunks of the
+   user's uploaded documents (ChromaDB, cosine similarity of at least 0.2) are added to the same evidence pool.
+3. **ReAct research.** The toolkit's ReAct agent reasons, calls a tool, reads the result and repeats, up to 4
+   tool calls: `corpus_search` (the knowledge base), `docs_search` (uploaded files) and `web_search` (Tavily).
+   It returns a short answer plus **claims**, each citing one passage by id with a word-for-word quote.
+4. **Independent verification.** A different Nemotron model labels every claim supported, unsupported or
+   contradicted against the passage it cites, and checks **claim 0**: whether the claims together establish the
+   answer to this exact question.
+5. **Web fact check.** Each supported claim is searched on the live web; the snippets pass the retrieval rail,
+   and an LLM judge decides whether they confirm, contradict or do not mention it. A contradiction rejects the
+   claim. Claims from uploaded documents are never sent to the web.
+6. **Self-correction.** The rule-based Controller (below) accepts the answer, searches again with the unsupported
+   claims as queries, asks for a rewrite without the contradicted claims, or abstains when the retry cap is hit.
+7. **Guardrails around everything.** Before: blocks prompt injection, off-topic and harmful requests. During:
+   strips instructions hidden in retrieved or web text before any model reads it. After: checks the answer is
+   grounded in its claims, checks citation format, redacts personal data, and turns an abstention into a clear
+   "insufficient evidence" message.
+
 **Controller policy**, checked in this order after each verified draft (no LLM involved, fully unit-tested):
 
 | Situation | Action |
@@ -49,7 +84,7 @@ same name) and the system answered unanswerable questions.
 | Part | Implementation |
 |---|---|
 | Orchestration | NeMo Agent Toolkit 1.9.0: every component is a registered toolkit function wired in toolkit YAML; the Controller is a custom workflow function |
-| Researcher agent | The toolkit's built-in **ReAct agent** (`_type: react_agent`, native tool calling, budget of 4 tool calls per draft) with two registered tool functions, `corpus_search` and `web_search` (Tavily). Passages it finds join the evidence pool, so the Verifier checks their citations. Removing `web_search` from its tools (`configs/corpus_only.yml`, or the API / UI switch) gives corpus-only answers |
+| Researcher agent | The toolkit's built-in **ReAct agent** (`_type: react_agent`, native tool calling, budget of 4 tool calls per draft) with three registered tool functions: `corpus_search`, `docs_search` (uploaded files) and `web_search` (Tavily). Passages it finds join the evidence pool, so the Verifier checks their citations. Its tool list is the single switch for web and document access; `configs/corpus_only.yml` (or the API / UI switches) gives corpus-only answers |
 | Planner, Researcher model | `nvidia/nemotron-3.5-super-vl-120b-a12b` (thinking off, temperature 0) |
 | Verifier | `nvidia/nemotron-3.5-lightning-30b-a3b`, a different model from the Researcher |
 | Retrieval | BM25 (`rank_bm25`) + FAISS over `nvidia/nemotron-3.5-embed-1b`, reciprocal rank fusion, `nvidia/llama-nemotron-rerank-vl-1b-v2` |
@@ -57,7 +92,7 @@ same name) and the system answered unanswerable questions.
 | Fact check | Tavily Search API + LLM judge: each supported claim is searched on the live web, the snippets pass the retrieval rail, and the Verifier's model labels every claim supported / contradicted / not mentioned in one call, citing the source URL. A web contradiction downgrades the claim |
 | Safety | NeMo Guardrails 0.24.1, Colang 1.0: input, retrieval, output and abstention rails, each switchable. Guardrails runs the flows; the checks inside them are deterministic Python rules |
 | Caching | every LLM, embedding, rerank, judge and web-search call cached on disk by hash of (model or query, prompt, params); the ReAct agent's calls through LangChain's SQLite LLM cache |
-| API / UI | FastAPI service; Streamlit UI that talks only to the API (the NVIDIA key never reaches the UI) |
+| API / UI | FastAPI service; Streamlit UI (Streamlit components only) that talks only to the API, so the NVIDIA key never reaches the UI. It shows a verdict stamp, the answer with citations, each claim with its verdict, quote and web check, the step-by-step trace, the safety log and the sources, and has a panel for uploading documents |
 | Evaluation | RAGAS 0.4 with `nvidia/nemotron-3-ultra-550b-a55b` as a fixed judge (separate from the system's models) |
 
 ## Quick start
@@ -84,16 +119,15 @@ API:
 
 ```http
 POST /ask
-{"question": "...", "settings": {"retry_cap": 1, "rails": {"pii": false}, "fact_check": true}}
+{"question": "...", "settings": {"retry_cap": 1, "rails": {"pii": false}, "fact_check": true,
+                                 "web_search": false, "uploads": true}}
 ```
+
+Uploaded documents: `POST /documents` (multipart field `files`), `GET /documents`, `DELETE /documents/{id}`.
 
 The response carries the answer, an abstained / blocked flag, each claim with its verdict, cited passage, quote and
 web check (with the source URL), the per-attempt loop trace (plan, queries, new passages, verdicts, Controller action), the
 guardrail log, and latency, token and LLM-call counts.
-
-## Screenshots
-
-Not captured yet. Run `.\demo.ps1`, then add images to `docs/screenshots/` and link them here.
 
 ## Data
 
@@ -158,8 +192,9 @@ passages and 15 injected questions caught, plus 5 injection phrasings that are n
   local to the API process's machine and shared by everyone using that API (no per-user separation).
 - **The RAGAS judge is an LLM too.** Scores depend on `nemotron-3-ultra` judging correctly; judge calibration
   against hand labels is part of the evaluation still to do.
-- **Platform.** Developed on Windows with Python 3.13. The Docker setup and the UI have not yet been run end to end,
-  and `requirements.txt` is a Windows lock (the Dockerfile drops `pywin32`).
+- **Platform.** Developed on Windows with Python 3.13. The API and UI have been run end to end locally; the Docker
+  setup has not (Docker is not installed on the development machine), and `requirements.txt` is a Windows lock
+  (the Dockerfile drops `pywin32`).
 - **NeMo Guardrails workaround.** In 0.24.1 (Colang 1.0), loading all flows into one config made flows of other
   stages fire, so each stage runs in its own `LLMRails`. The toolkit's own guardrails integration is not used: it
   requires an older Guardrails version that does not install on Windows.
@@ -184,7 +219,8 @@ src/
   llm.py        cached NVIDIA client + profiler hooks;  websearch.py  Tavily search;  state.py  Pydantic models
 eval/           run_eval.py (record outputs), ragas_eval.py (score them)
 scripts/        download_data, make_eval_sets, build_index, smoke_models
-tests/          139 unit tests, no API calls
+tests/          142 unit tests, no API calls
+docs/           screenshots
 docker/         Dockerfile, docker-compose.yml
 ```
 
