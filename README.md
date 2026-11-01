@@ -156,52 +156,6 @@ reranker 0.80, **RRF top 30 + hosted Nemotron reranker 0.95** (the chosen setup)
 Guardrail rules on clean data: 0 of 3,558 genuine passages and 0 of 351 normal questions flagged; all 15 poisoned
 passages and 15 injected questions caught, plus 5 injection phrasings that are not in the dataset's templates.
 
-## Limitations
-
-- **No test-set results yet.** Design decisions rest on a 20-question dev pilot and a 50-question retrieval check,
-  which is too small for firm conclusions.
-- **The guardrails are deterministic rules.** Injection, off-topic and unsafe detection use regular expressions. They
-  generalise to some new phrasings but will miss creative attacks. The dataset's injection templates were written
-  by the same project, so injection results will look better than real-world robustness. A hosted NemoGuard
-  content-safety model works with the API key but is not wired in; the topic-control model returned errors.
-- **The web check only catches contradictions.** By default (`web_check_required: false`) a claim is downgraded
-  only when the web contradicts it; a claim the web does not mention passes on the corpus evidence alone. On a dev
-  question, requiring confirmation made the system abstain on a correct answer because one true fact ("Heart
-  endorsed Kramer guitars") was too obscure for the search results. Set it to `true` if the web must confirm every
-  claim, at the cost of more abstentions. The judge can be wrong both ways. Web sources
-  vary in quality, and HotpotQA's facts date from 2017, so the live web may disagree. Search needs network access,
-  a `TAVILY_API_KEY` and free-tier credits (1 per claim checked); if Tavily or the judge is unavailable, the
-  model's verdict stands. Results are cached; set `cache: false` for fresh results. (The first version
-  fuzzy-matched words instead of using a judge: on a dev question it downgraded two true claims, scoring 72 against
-  a threshold of 80, and the system abstained on a correct answer.)
-- **The ReAct Researcher is an LLM agent.** How often it searches, and what for, varies by question; a budget of 4
-  tool calls per draft and the Controller's retry cap bound it. Its LLM calls go through the toolkit's LangChain
-  client, so they use LangChain's cache rather than ours. Passages it finds on the web can be cited, and the web
-  check then partly checks the web against itself. With web search on, questions outside the corpus get answered
-  from the web (e.g. "Which country won the 2022 FIFA World Cup?" -> Argentina, citing Wikipedia), so the eval
-  set's "unanswerable" items stop testing abstention; benchmarks run with `configs/corpus_only.yml`.
-- **The Verifier is itself an LLM** and can be wrong both ways. Claim 0's wording was tuned on 20 dev questions;
-  it trades some correct answers for fewer wrong ones.
-- **Hosted models can change.** Models are pinned by name only, and the Verifier model is a preview release.
-  Several listed models returned 404 for this account and were replaced.
-- **Cost and speed.** One question takes about 3 to 7 LLM calls and several seconds, and the free-tier rate limits
-  apply. Cached re-runs are free, but cached runs say nothing about latency.
-- **Uploaded documents.** Only text-based `.txt`, `.md` and `.pdf` (no OCR for scanned PDFs, no `.docx`), up to
-  20 MB each. Embedding a file uses the NVIDIA embedding API once per chunk (cached). Answers must still be factual
-  questions with cited claims: the off-topic rail blocks requests such as "summarize this document". The store is
-  local to the API process's machine and shared by everyone using that API (no per-user separation).
-- **The RAGAS judge is an LLM too.** Scores depend on `nemotron-3-ultra` judging correctly; judge calibration
-  against hand labels is part of the evaluation still to do.
-- **Platform.** Developed on Windows with Python 3.13. The API and UI have been run end to end locally; the Docker
-  setup has not (Docker is not installed on the development machine), and `requirements.txt` is a Windows lock
-  (the Dockerfile drops `pywin32`).
-- **NeMo Guardrails workaround.** In 0.24.1 (Colang 1.0), loading all flows into one config made flows of other
-  stages fire, so each stage runs in its own `LLMRails`. The toolkit's own guardrails integration is not used: it
-  requires an older Guardrails version that does not install on Windows.
-- **LangChain is installed.** The toolkit's agents ship in its LangChain plugin and run on LangGraph internally.
-  Our code configures the agent in YAML and never builds LangChain chains or agents; the only LangChain import
-  (`src/agent_cache.py`, the LLM cache) is enforced by a test.
-
 ## Project layout
 
 ```
