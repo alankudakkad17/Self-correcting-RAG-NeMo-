@@ -6,6 +6,7 @@ from src.state import ABSTAIN_TEXT
 from src.state import Action
 from src.state import Claim
 from src.state import Draft
+from src.state import ResearchOutput
 from src.state import Plan
 from src.state import RetrievedDoc
 from src.state import FactCheck
@@ -90,7 +91,7 @@ class FakeAgents:
 
     async def research(self, request):
         self.research_calls.append(request)
-        return self.drafts.pop(0)
+        return ResearchOutput(draft=self.drafts.pop(0))
 
     async def verify(self, request):
         self.verify_calls.append(request)
@@ -203,7 +204,7 @@ async def test_fact_checks_reach_the_result_and_report():
     class Checked(FakeAgents):
         async def verify(self, request):
             return VerifyOutput(verdicts=[v(1, "supported")],
-                                fact_checks=[FactCheck(claim_id=1, query="q", status="confirmed", score=97)])
+                                fact_checks=[FactCheck(claim_id=1, query="q", status="confirmed")])
 
     state = await make(Checked([Draft(answer="x", claims=[claim(1)])])).run("Q?")
     result = to_result(state, "S")
@@ -244,3 +245,20 @@ async def test_contradicted_answer_triggers_revision():
     assert [a.action for a in state.attempts] == [Action.REVISE, Action.ACCEPT]
     assert "contradicted reason" in agents.research_calls[1].feedback
     assert to_result(state, "D").answer_verdict.label == "supported"
+
+
+async def test_passages_found_by_the_react_researcher_join_the_evidence_before_verification():
+    web = RetrievedDoc(doc_id="web_abc", title="Example", text="found on the web", score=1, rank=1, url="https://x")
+
+    class Agentic(FakeAgents):
+        async def research(self, request):
+            self.research_calls.append(request)
+            return ResearchOutput(draft=Draft(answer="x", claims=[claim(1, doc="web_abc")]), new_docs=[web],
+                                  searches=["web: example"])
+
+    agents = Agentic([], [[v(1, "supported")]])
+    state = await make(agents).run("Q?")
+    assert "web_abc" in {d.doc_id for d in agents.verify_calls[0].evidence}  # the Verifier can check the citation
+    assert state.attempts[0].agent_searches == ["web: example"]
+    assert "web_abc" in state.attempts[0].new_doc_ids
+    assert to_result(state, "S").answer == "x"

@@ -1,9 +1,19 @@
 {
-  "timestamp": 1793286334.0313141,
+  "timestamp": 1793533338.5867932,
   "results": [
     {
       "role": "generator",
       "model": "nvidia/nemotron-3.5-super-vl-120b-a12b",
+      "ok": true,
+      "reply": "Paris",
+      "cached": true,
+      "latency_s": 0.0,
+      "prompt_tokens": 27,
+      "completion_tokens": 2
+    },
+    {
+      "role": "verifier",
+      "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
       "ok": true,
       "reply": "Paris",
       "cached": true,

@@ -110,8 +110,6 @@ def test_unknown_rail_is_422_and_other_failures_502(client):
     assert resp.status_code == 502 and "boom" in resp.json()["detail"]
 
 
-def test_health_settings_and_examples(client, tmp_path, monkeypatch):
+def test_health_and_settings(client):
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/settings").json()["retry_cap"] == 2  # from configs/system.yml
-    monkeypatch.setattr(app_module, "EXAMPLES_PATH", tmp_path / "none.json")
-    assert client.get("/examples").json() == []

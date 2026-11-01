@@ -1,21 +1,22 @@
-"""Live web search for fact checking, via the Tavily Search API (https://docs.tavily.com).
+"""Live web search via the Tavily Search API (https://docs.tavily.com). Used by the agent's web tool and the
+web fact check.
 
 POST https://api.tavily.com/search with a Bearer key (TAVILY_API_KEY). A "basic" search costs 1 credit.
 Results are cached on disk (data/cache/tavily_cache.sqlite) by (query, params) so re-runs are reproducible and
-spend no credits; set `cache: false` on the fact checker for fresh results every time.
-Web text is untrusted: it is only fuzzy-matched against, never shown to an LLM.
+spend no credits; pass cache=False for fresh results every time.
+Web text is untrusted: callers send it through the retrieval rail before any model sees it.
 """
 
+import hashlib
 import os
-import re
 import time
 
 import httpx
-from rapidfuzz import fuzz
 
 from src import paths
 from src.llm import LLMCache
 from src.llm import cache_key
+from src.state import RetrievedDoc
 
 API_URL = "https://api.tavily.com/search"
 
@@ -55,26 +56,9 @@ class TavilyClient:
         return results
 
 
-def _normalize(text: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", (text or "").lower())).strip()
-
-
-def match_score(needle: str, haystack: str) -> float:
-    """0-100: how well `needle` appears somewhere in `haystack` (best partial alignment)."""
-    n, h = _normalize(needle), _normalize(haystack)
-    if not n or not h:
-        return 0.0
-    if n in h:
-        return 100.0
-    return float(fuzz.partial_ratio(n, h))
-
-
-def best_match(claim_text: str, quote: str, results: list[dict]) -> tuple[float, dict | None]:
-    """Best (score, result): the claim's quote or its text, matched against each result's title + snippet."""
-    best_score, best = 0.0, None
-    for r in results:
-        content = f"{r.get('title') or ''}. {r.get('content') or ''}"
-        score = max(match_score(quote, content) if quote else 0.0, match_score(claim_text, content))
-        if score > best_score:
-            best_score, best = score, r
-    return best_score, best
+def web_doc(result: dict, rank: int) -> RetrievedDoc:
+    """A Tavily result as a passage with a stable id: web_<hash of url + snippet>."""
+    url, content = result.get("url") or "", result.get("content") or ""
+    doc_id = "web_" + hashlib.sha256(f"{url}\n{content}".encode()).hexdigest()[:10]
+    return RetrievedDoc(doc_id=doc_id, title=result.get("title") or url, text=content,
+                        score=float(result.get("score") or 0.0), rank=rank, url=url)

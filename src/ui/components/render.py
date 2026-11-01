@@ -7,8 +7,8 @@ import re
 from rapidfuzz import fuzz
 
 VERDICT_COLORS = {"supported": "green", "unsupported": "orange", "contradicted": "red", None: "gray"}
-WEB_LABELS = {"confirmed": "Web: confirmed", "not_found": "Web: not confirmed", "no_results": "Web: no results",
-              "error": "Web: check failed", None: "Web: not checked"}
+WEB_LABELS = {"confirmed": "Web: confirmed", "contradicted": "Web: contradicted", "not_found": "Web: not mentioned",
+              "no_results": "Web: no results", "error": "Web: check failed", None: "Web: not checked"}
 
 _MD_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|>~:$<])")
 

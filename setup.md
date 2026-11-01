@@ -48,9 +48,6 @@ Every guardrail can be switched off in `configs/system.yml`.
 ## Demo: API + Streamlit UI
 
 ```powershell
-# once: precompute the UI's cached examples (live calls; makes the demo work offline afterwards)
-.\.venv\Scripts\python.exe scripts/make_examples.py
-
 # Windows, no Docker / make: API in a new window, UI here -> http://localhost:8501
 .\demo.ps1
 
@@ -73,6 +70,13 @@ latency / token / LLM-call counts. Rate limits come back as HTTP 429 and show as
 .\.venv\Scripts\python.exe eval/run_eval.py --split pilot             # records outputs to eval/results/runs/
 .\.venv\Scripts\python.exe eval/ragas_eval.py --run eval/results/runs/<run_dir>
 ```
+
+## The ReAct Researcher
+
+The Researcher is the toolkit's built-in ReAct agent (`research_agent` in `configs/system.yml`, `_type: react_agent`)
+with two tools, `corpus_search` and `web_search`. It comes from the toolkit's LangChain plugin
+(`nvidia-nat-langchain[nvidia]`, in requirements.txt). To use the plain single-call Researcher instead, set
+`researcher: {_type: researcher, llm_name: generator}`.
 
 ## Known version workarounds
 - `nvidia-nat[guardrails]` is not used: it pins `nemoguardrails<0.22`, which needs `annoy`

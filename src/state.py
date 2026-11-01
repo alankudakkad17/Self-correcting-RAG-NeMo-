@@ -38,14 +38,15 @@ class EvalItem(BaseModel):
 
 
 class RetrievedDoc(BaseModel):
-    doc_id: str
+    doc_id: str  # corpus id, or "web_<hash>" for a passage the agent found on the web
     title: str
     text: str
     score: float
     rank: int
+    url: str = ""  # set for web passages
 
 
-# ---- Milestone 3: agents and Controller ----
+# ---- agents and Controller ----
 
 
 class Plan(BaseModel):
@@ -81,6 +82,13 @@ class ResearchRequest(BaseModel):
     feedback: str = ""
 
 
+class ResearchOutput(BaseModel):
+    """Researcher result: the draft, plus passages the ReAct agent found with its tools (already sanitized)."""
+    draft: Draft
+    new_docs: list[RetrievedDoc] = Field(default_factory=list)
+    searches: list[str] = Field(default_factory=list)  # e.g. "corpus: who founded X", "web: X founder"
+
+
 class VerifyRequest(BaseModel):
     question: str
     answer: str
@@ -91,16 +99,15 @@ class VerifyRequest(BaseModel):
 ANSWER_CLAIM_ID = 0  # the Verifier's extra check: "the claims together establish this answer to this question"
 
 
-FactCheckStatus = Literal["confirmed", "not_found", "no_results", "error"]
+FactCheckStatus = Literal["confirmed", "contradicted", "not_found", "no_results", "error"]
 
 
 class FactCheck(BaseModel):
-    """Result of checking one claim against live web search results (Tavily)."""
+    """Result of checking one claim against live web search results (Tavily), judged by an LLM."""
     claim_id: int
     query: str
     status: FactCheckStatus
-    score: float = 0.0  # 0-100 best fuzzy match of the claim / quote in a result
-    url: str = ""  # the best-matching web source
+    url: str = ""  # the web source the judge relied on
     source_title: str = ""
     detail: str = ""
 
@@ -138,7 +145,8 @@ class Attempt(BaseModel):
     """One pass of the loop, for the trace shown in the UI and logged in eval runs."""
     index: int
     queries: list[str]  # queries run before this draft
-    new_doc_ids: list[str]  # passages added to the evidence pool by those queries
+    new_doc_ids: list[str]  # passages added to the evidence pool by those queries and by the agent's searches
+    agent_searches: list[str] = Field(default_factory=list)  # tool calls the ReAct Researcher made for this draft
     draft: Draft
     verdicts: list[Verdict] = Field(default_factory=list)
     fact_checks: list[FactCheck] = Field(default_factory=list)
@@ -223,4 +231,3 @@ class ApiResponse(BaseModel):
     guardrail_events: list[GuardrailEvent]
     metrics: ApiMetrics
     settings: dict  # the effective settings this answer was produced with
-    cached_example: bool = False  # served from data/examples.json, not computed now

@@ -80,3 +80,26 @@ def parse_verdicts(text: str, claims: list[Claim]) -> list[Verdict]:
             continue
     return [found.get(c.claim_id) or Verdict(claim_id=c.claim_id, label="unsupported", reason="no valid verdict")
             for c in claims]
+
+
+WEB_LABELS = ("supported", "contradicted", "not_mentioned")
+
+
+def parse_web_checks(text: str, claim_ids: list[int]) -> dict[int, tuple[str, int, str]]:
+    """claim_id -> (label, source number, reason) for every valid entry. Claims missing from the reply are left
+    out (the caller treats them as a failed check, not as evidence either way)."""
+    obj = extract_json(text) or {}
+    # Models do not always keep the requested key: accept the usual variants.
+    entries = next((obj[k] for k in ("checks", "claims", "verdicts", "results") if isinstance(obj.get(k), list)), [])
+    out = {}
+    for raw in entries:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            claim_id, label = int(raw.get("claim_id")), str(raw.get("label", "")).strip().lower()
+            source = int(raw.get("source") or 0)
+        except (TypeError, ValueError):
+            continue
+        if claim_id in claim_ids and label in WEB_LABELS:
+            out[claim_id] = (label, source, str(raw.get("reason", ""))[:300])
+    return out

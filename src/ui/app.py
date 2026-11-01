@@ -36,14 +36,6 @@ def get_client(url: str) -> ApiClient:
     return ApiClient(url)
 
 
-@st.cache_data(ttl=60)
-def get_examples(url: str) -> list[dict]:
-    try:
-        return get_client(url).examples()
-    except ApiError:
-        return []
-
-
 # ---- sidebar: connection and settings ----
 
 with st.sidebar:
@@ -57,23 +49,14 @@ with st.sidebar:
     with st.expander("Guardrails"):
         rails = {key: st.toggle(label, value=True, key=f"rail_{key}") for key, label in RAIL_LABELS.items()}
 
-    examples = get_examples(api_url)
-    st.subheader("Cached examples")
-    example_titles = ["(none)"] + [e["question"][:70] for e in examples]
-    picked = st.selectbox("Load a stored answer (no live calls)", range(len(example_titles)),
-                          format_func=lambda i: example_titles[i])
-
 # ---- question ----
 
 st.title("Self-Correcting RAG")
 st.caption("Answers only when every claim is backed by evidence: plan, retrieve, draft with citations, verify "
            "(different model + live web search), then accept, retry, revise or abstain.")
 
-default_question = examples[picked - 1]["question"] if picked else ""
-question = st.text_area("Question", value=default_question, height=80)
-col_ask, col_cached = st.columns([1, 1])
-ask_clicked = col_ask.button("Ask", type="primary", disabled=not question.strip())
-cached_clicked = col_cached.button("Show cached answer", disabled=not picked)
+question = st.text_area("Question", height=80)
+ask_clicked = st.button("Ask", type="primary", disabled=not question.strip())
 
 if ask_clicked:
     settings = {"retry_cap": retry_cap, "fact_check": fact_check, "rails": rails}
@@ -84,8 +67,6 @@ if ask_clicked:
             st.warning(f"Rate limit: {e}")
         except ApiError as e:
             st.error(str(e))
-if cached_clicked:
-    st.session_state["response"] = {**examples[picked - 1]["response"], "cached_example": True}
 
 response = st.session_state.get("response")
 if not response:
@@ -93,8 +74,6 @@ if not response:
 
 # ---- answer ----
 
-if response.get("cached_example"):
-    st.info("Cached example: stored response, not computed now.")
 if response["blocked"]:
     st.error(f"Blocked by an input guardrail. {response['answer']}")
 elif response["abstained"]:
@@ -152,6 +131,8 @@ with tab_trace:
         with st.expander(f"Attempt {a['index'] + 1}: {a['action']}", expanded=a is response["attempts"][-1]):
             if a["queries"]:
                 st.markdown("**Queries:** " + escape_md(" | ".join(a["queries"])))
+            if a.get("agent_searches"):
+                st.markdown("**ReAct agent searched:** " + escape_md(" | ".join(a["agent_searches"])))
             st.markdown(f"**New passages:** {escape_md(', '.join(a['new_doc_ids']) or 'none')}")
             st.markdown(f"**Draft answer:** {escape_md(a['draft']['answer'])}")
             labels = {v["claim_id"]: v for v in a["verdicts"]}

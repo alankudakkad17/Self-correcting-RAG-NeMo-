@@ -47,8 +47,5 @@ class ApiClient:
     def settings(self) -> dict:
         return self._request("GET", "/settings")
 
-    def examples(self) -> list[dict]:
-        return self._request("GET", "/examples")
-
     def ask(self, question: str, settings: dict | None = None) -> dict:
         return self._request("POST", "/ask", json={"question": question, "settings": settings or {}})

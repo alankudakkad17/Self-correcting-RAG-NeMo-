@@ -17,9 +17,10 @@ flowchart TD
     IR -- passed --> P[Planner<br/>1-4 sub-questions]
     P --> R[Hybrid retrieval<br/>BM25 + FAISS → RRF → Nemotron rerank]
     R --> RR[Retrieval rail<br/>strip injected instructions]
-    RR --> RS[Researcher<br/>short answer + claims citing passage + quote]
+    RR --> RS[ReAct Researcher · toolkit react_agent<br/>reasons, searches, writes claims citing passage + quote]
+    RS <-. tool calls .-> T[Tools: corpus_search · web_search<br/>results pass the retrieval rail]
     RS --> V[Verifier · different model<br/>each claim + claim 0: does the answer follow?]
-    V --> W[Web fact check · Tavily<br/>do live search results back each claim?]
+    V --> W[Web fact check · Tavily + LLM judge<br/>do live search results back each claim?]
     W --> C{Controller<br/>plain Python rules}
     C -- all supported --> OR{Output rails<br/>groundedness · citations · PII}
     C -- unsupported, retries left --> TQ[Targeted queries<br/>from unsupported claims] --> R
@@ -46,13 +47,14 @@ same name) and the system answered unanswerable questions.
 
 | Part | Implementation |
 |---|---|
-| Orchestration | NeMo Agent Toolkit 1.9.0: every component is a registered toolkit function; the Controller is a custom workflow function |
-| Planner, Researcher | `nvidia/nemotron-3.5-super-vl-120b-a12b` (thinking off, temperature 0) |
+| Orchestration | NeMo Agent Toolkit 1.9.0: every component is a registered toolkit function wired in toolkit YAML; the Controller is a custom workflow function |
+| Researcher agent | The toolkit's built-in **ReAct agent** (`_type: react_agent`, native tool calling, budget of 4 tool calls per draft) with two registered tool functions, `corpus_search` and `web_search` (Tavily). Passages it finds join the evidence pool, so the Verifier checks their citations |
+| Planner, Researcher model | `nvidia/nemotron-3.5-super-vl-120b-a12b` (thinking off, temperature 0) |
 | Verifier | `nvidia/nemotron-3.5-lightning-30b-a3b`, a different model from the Researcher |
 | Retrieval | BM25 (`rank_bm25`) + FAISS over `nvidia/nemotron-3.5-embed-1b`, reciprocal rank fusion, `nvidia/llama-nemotron-rerank-vl-1b-v2` |
-| Fact check | Tavily Search API: each supported claim is searched on the live web and fuzzy-matched (`rapidfuzz`) against the results; the matching source URL is kept |
+| Fact check | Tavily Search API + LLM judge: each supported claim is searched on the live web, the snippets pass the retrieval rail, and the Verifier's model labels every claim supported / contradicted / not mentioned in one call, citing the source URL. A web contradiction downgrades the claim |
 | Safety | NeMo Guardrails 0.24.1, Colang 1.0: input, retrieval, output and abstention rails, each switchable. Guardrails runs the flows; the checks inside them are deterministic Python rules |
-| Caching | every LLM, embedding, rerank, judge and web-search call cached on disk by hash of (model or query, prompt, params) |
+| Caching | every LLM, embedding, rerank, judge and web-search call cached on disk by hash of (model or query, prompt, params); the ReAct agent's calls through LangChain's SQLite LLM cache |
 | API / UI | FastAPI service; Streamlit UI that talks only to the API (the NVIDIA key never reaches the UI) |
 | Evaluation | RAGAS 0.4 with `nvidia/nemotron-3-ultra-550b-a55b` as a fixed judge (separate from the system's models) |
 
@@ -126,24 +128,36 @@ passages and 15 injected questions caught, plus 5 injection phrasings that are n
   generalise to some new phrasings but will miss creative attacks. The dataset's injection templates were written
   by the same project, so injection results will look better than real-world robustness. A hosted NemoGuard
   content-safety model works with the API key but is not wired in; the topic-control model returned errors.
-- **The web check is approximate.** It fuzzy-matches the claim against search snippets, so a true claim worded
-  differently from every result is "not confirmed" and downgraded, which can cause extra abstentions; a snippet that
-  merely repeats the claim's words confirms it. Web sources vary in quality, and HotpotQA's facts date from 2017,
-  so the live web may disagree. Search needs network access, a `TAVILY_API_KEY` and free-tier credits (1 per
-  claim checked); if Tavily is unavailable, the model's verdict stands. Results are cached, so a repeated question
-  reuses the first search; set `cache: false` for fresh results.
+- **The web check only catches contradictions.** By default (`web_check_required: false`) a claim is downgraded
+  only when the web contradicts it; a claim the web does not mention passes on the corpus evidence alone. On a dev
+  question, requiring confirmation made the system abstain on a correct answer because one true fact ("Heart
+  endorsed Kramer guitars") was too obscure for the search results. Set it to `true` if the web must confirm every
+  claim, at the cost of more abstentions. The judge can be wrong both ways. Web sources
+  vary in quality, and HotpotQA's facts date from 2017, so the live web may disagree. Search needs network access,
+  a `TAVILY_API_KEY` and free-tier credits (1 per claim checked); if Tavily or the judge is unavailable, the
+  model's verdict stands. Results are cached; set `cache: false` for fresh results. (The first version
+  fuzzy-matched words instead of using a judge: on a dev question it downgraded two true claims, scoring 72 against
+  a threshold of 80, and the system abstained on a correct answer.)
+- **The ReAct Researcher is an LLM agent.** How often it searches, and what for, varies by question; a budget of 4
+  tool calls per draft and the Controller's retry cap bound it. Its LLM calls go through the toolkit's LangChain
+  client, so they use LangChain's cache rather than ours. Passages it finds on the web can be cited, and the web
+  check then partly checks the web against itself.
 - **The Verifier is itself an LLM** and can be wrong both ways. Claim 0's wording was tuned on 20 dev questions;
   it trades some correct answers for fewer wrong ones.
 - **Hosted models can change.** Models are pinned by name only, and the Verifier model is a preview release.
   Several listed models returned 404 for this account and were replaced.
 - **Cost and speed.** One question takes about 3 to 7 LLM calls and several seconds, and the free-tier rate limits
   apply. Cached re-runs are free, but cached runs say nothing about latency.
-- **Exact match is harsh on wording.** Answers such as "since 1736" vs "1736" score 0 even when right.
+- **The RAGAS judge is an LLM too.** Scores depend on `nemotron-3-ultra` judging correctly; judge calibration
+  against hand labels is part of the evaluation still to do.
 - **Platform.** Developed on Windows with Python 3.13. The Docker setup and the UI have not yet been run end to end,
   and `requirements.txt` is a Windows lock (the Dockerfile drops `pywin32`).
 - **NeMo Guardrails workaround.** In 0.24.1 (Colang 1.0), loading all flows into one config made flows of other
   stages fire, so each stage runs in its own `LLMRails`. The toolkit's own guardrails integration is not used: it
   requires an older Guardrails version that does not install on Windows.
+- **LangChain is installed.** The toolkit's agents ship in its LangChain plugin and run on LangGraph internally.
+  Our code configures the agent in YAML and never builds LangChain chains or agents; the only LangChain import
+  (`src/agent_cache.py`, the LLM cache) is enforced by a test.
 
 ## Project layout
 
@@ -151,7 +165,8 @@ passages and 15 injected questions caught, plus 5 injection phrasings that are n
 configs/        system.yml (the system), llm.yml (models), smoke.yml (connectivity check)
 data/           eval/ frozen sets + manifest, processed/ corpus; raw/, index/, cache/ are git-ignored
 src/
-  functions/    planner, researcher, verifier, fact_checker, retriever, guardrails (toolkit functions)
+  functions/    planner, agentic_researcher (ReAct), researcher (plain), search_tools, verifier, fact_checker,
+                retriever, guardrails (toolkit functions)
   workflows/    self_correcting.py (Controller), smoke.py
   guardrails/   config.yml, input/retrieval/output/abstention .co flows, actions.py, rails.py
   retrieval/    bm25, vector (FAISS), fusion (RRF), reranker
@@ -159,8 +174,8 @@ src/
   ui/           Streamlit app, API client, rendering helpers
   llm.py        cached NVIDIA client + profiler hooks;  websearch.py  Tavily search;  state.py  Pydantic models
 eval/           run_eval.py (record outputs), ragas_eval.py (score them)
-scripts/        download_data, make_eval_sets, build_index, make_examples, smoke_models
-tests/          109 unit tests, no API calls
+scripts/        download_data, make_eval_sets, build_index, smoke_models
+tests/          120 unit tests, no API calls
 docker/         Dockerfile, docker-compose.yml
 ```
 
