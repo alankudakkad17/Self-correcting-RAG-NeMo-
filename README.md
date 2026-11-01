@@ -18,7 +18,8 @@ flowchart TD
     P --> R[Hybrid retrieval<br/>BM25 + FAISS → RRF → Nemotron rerank]
     R --> RR[Retrieval rail<br/>strip injected instructions]
     RR --> RS[ReAct Researcher · toolkit react_agent<br/>reasons, searches, writes claims citing passage + quote]
-    RS <-. tool calls .-> T[Tools: corpus_search · web_search<br/>results pass the retrieval rail]
+    RS <-. tool calls .-> T[Tools: corpus_search · docs_search · web_search<br/>results pass the retrieval rail]
+    T --- UD[(ChromaDB<br/>uploaded documents)]
     RS --> V[Verifier · different model<br/>each claim + claim 0: does the answer follow?]
     V --> W[Web fact check · Tavily + LLM judge<br/>do live search results back each claim?]
     W --> C{Controller<br/>plain Python rules}
@@ -52,6 +53,7 @@ same name) and the system answered unanswerable questions.
 | Planner, Researcher model | `nvidia/nemotron-3.5-super-vl-120b-a12b` (thinking off, temperature 0) |
 | Verifier | `nvidia/nemotron-3.5-lightning-30b-a3b`, a different model from the Researcher |
 | Retrieval | BM25 (`rank_bm25`) + FAISS over `nvidia/nemotron-3.5-embed-1b`, reciprocal rank fusion, `nvidia/llama-nemotron-rerank-vl-1b-v2` |
+| Uploaded documents | **ChromaDB** vector store (embedded, persistent in `data/uploads/`, git-ignored): `.txt` / `.md` / `.pdf` files are chunked (~800 characters, sentence-aware, overlapping), embedded with the same Nemotron embedder, and searched by the agent's `docs_search` tool. Upload, list and delete through the API (`/documents`) or the UI's Documents panel. Claims citing uploaded files are never sent to the web check |
 | Fact check | Tavily Search API + LLM judge: each supported claim is searched on the live web, the snippets pass the retrieval rail, and the Verifier's model labels every claim supported / contradicted / not mentioned in one call, citing the source URL. A web contradiction downgrades the claim |
 | Safety | NeMo Guardrails 0.24.1, Colang 1.0: input, retrieval, output and abstention rails, each switchable. Guardrails runs the flows; the checks inside them are deterministic Python rules |
 | Caching | every LLM, embedding, rerank, judge and web-search call cached on disk by hash of (model or query, prompt, params); the ReAct agent's calls through LangChain's SQLite LLM cache |
@@ -150,6 +152,10 @@ passages and 15 injected questions caught, plus 5 injection phrasings that are n
   Several listed models returned 404 for this account and were replaced.
 - **Cost and speed.** One question takes about 3 to 7 LLM calls and several seconds, and the free-tier rate limits
   apply. Cached re-runs are free, but cached runs say nothing about latency.
+- **Uploaded documents.** Only text-based `.txt`, `.md` and `.pdf` (no OCR for scanned PDFs, no `.docx`), up to
+  20 MB each. Embedding a file uses the NVIDIA embedding API once per chunk (cached). Answers must still be factual
+  questions with cited claims: the off-topic rail blocks requests such as "summarize this document". The store is
+  local to the API process's machine and shared by everyone using that API (no per-user separation).
 - **The RAGAS judge is an LLM too.** Scores depend on `nemotron-3-ultra` judging correctly; judge calibration
   against hand labels is part of the evaluation still to do.
 - **Platform.** Developed on Windows with Python 3.13. The Docker setup and the UI have not yet been run end to end,
@@ -172,12 +178,13 @@ src/
   workflows/    self_correcting.py (Controller), smoke.py
   guardrails/   config.yml, input/retrieval/output/abstention .co flows, actions.py, rails.py
   retrieval/    bm25, vector (FAISS), fusion (RRF), reranker
+  uploads/      extract (txt / md / pdf), chunking, ChromaDB store for uploaded documents
   api/          FastAPI app and workflow runner
   ui/           Streamlit app, API client, rendering helpers
   llm.py        cached NVIDIA client + profiler hooks;  websearch.py  Tavily search;  state.py  Pydantic models
 eval/           run_eval.py (record outputs), ragas_eval.py (score them)
 scripts/        download_data, make_eval_sets, build_index, smoke_models
-tests/          124 unit tests, no API calls
+tests/          139 unit tests, no API calls
 docker/         Dockerfile, docker-compose.yml
 ```
 

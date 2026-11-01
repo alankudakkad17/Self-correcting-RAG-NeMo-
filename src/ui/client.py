@@ -49,3 +49,13 @@ class ApiClient:
 
     def ask(self, question: str, settings: dict | None = None) -> dict:
         return self._request("POST", "/ask", json={"question": question, "settings": settings or {}})
+
+    def upload_documents(self, files: list[tuple[str, bytes]]) -> list[dict]:
+        """files: (filename, content). Returns one result per file: added / already uploaded / rejected."""
+        return self._request("POST", "/documents", files=[("files", (name, data)) for name, data in files])
+
+    def list_documents(self) -> list[dict]:
+        return self._request("GET", "/documents")
+
+    def delete_document(self, doc_id: str) -> dict:
+        return self._request("DELETE", f"/documents/{doc_id}")

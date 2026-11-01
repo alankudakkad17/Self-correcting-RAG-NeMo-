@@ -48,9 +48,37 @@ with st.sidebar:
     web_search = st.toggle("Agent web search", value=True,
                            help="Off = corpus-only: answers come only from the document collection, and questions "
                                 "it does not cover get 'insufficient evidence'.")
-    fact_check = st.toggle("Web fact check (Tavily)", value=True)
+    uploads = st.toggle("Search uploaded documents", value=True)
+    fact_check = st.toggle("Web fact check (Tavily)", value=True,
+                           help="Claims citing your uploaded documents are never sent to the web check.")
     with st.expander("Guardrails"):
         rails = {key: st.toggle(label, value=True, key=f"rail_{key}") for key, label in RAIL_LABELS.items()}
+
+    st.subheader("Documents")
+    picked_files = st.file_uploader("Upload .txt, .md or .pdf", type=["txt", "md", "pdf"],
+                                    accept_multiple_files=True, key=f"uploader_{st.session_state.get('uploads_done', 0)}")
+    if picked_files and st.button("Add to knowledge base"):
+        with st.spinner("Reading, chunking and embedding..."):
+            try:
+                for r in client.upload_documents([(f.name, f.getvalue()) for f in picked_files]):
+                    note = f"{r.get('chunks', '')} chunks" if r["status"] != "rejected" else r.get("reason", "")
+                    st.caption(f"{escape_md(r.get('filename') or '')}: {r['status']} {escape_md(str(note))}")
+                st.session_state["uploads_done"] = st.session_state.get("uploads_done", 0) + 1  # clears the picker
+            except ApiError as e:
+                st.error(str(e))
+    try:
+        documents = client.list_documents()
+    except ApiError:
+        documents = []
+    for d in documents:
+        col_name, col_del = st.columns([4, 1])
+        col_name.caption(f"{escape_md(d['filename'])} · {d['chunks']} chunks")
+        if col_del.button("✕", key=f"del_{d['doc_id']}", help=f"Remove {d['filename']}"):
+            try:
+                client.delete_document(d["doc_id"])
+                st.rerun()
+            except ApiError as e:
+                st.error(str(e))
 
 # ---- question ----
 
@@ -62,7 +90,8 @@ question = st.text_area("Question", height=80)
 ask_clicked = st.button("Ask", type="primary", disabled=not question.strip())
 
 if ask_clicked:
-    settings = {"retry_cap": retry_cap, "fact_check": fact_check, "web_search": web_search, "rails": rails}
+    settings = {"retry_cap": retry_cap, "fact_check": fact_check, "web_search": web_search, "uploads": uploads,
+                "rails": rails}
     with st.spinner("Planning, retrieving, drafting and verifying..."):
         try:
             st.session_state["response"] = client.ask(question, settings)

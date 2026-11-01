@@ -104,3 +104,8 @@ def test_downgrade_reason_names_the_web_status():
 def test_other_labels_are_never_changed():
     out = apply_fact_checks([Verdict(claim_id=1, label="contradicted")], CHECKS)
     assert out[0].label == "contradicted"
+
+
+def test_uploaded_document_ids_are_recognised():
+    from src.functions.verifier import is_upload
+    assert is_upload("up_1a2b3c4d5e_0003") and not is_upload("Heart_band") and not is_upload("web_abc")

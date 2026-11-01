@@ -33,6 +33,8 @@ MAX_LOADED = 3  # each loaded variant holds its own index, BM25 and Guardrails i
 
 AGENT_FUNCTION = "research_agent"  # the react_agent entry in configs/system.yml
 WEB_TOOL = "web_search"  # its web search tool; removing it gives corpus-only mode
+DOCS_TOOL = "docs_search"  # its uploaded-documents tool
+UPLOADS_RETRIEVER = "uploads_retriever"  # the Controller's retrieval over uploaded documents
 
 
 class UnknownRailError(ValueError):
@@ -54,15 +56,21 @@ def build_config(settings: ApiSettings, base: dict | None = None) -> tuple[dict,
     elif settings.fact_check is True and "fact_checker" not in config["functions"]["verifier"]:
         config["functions"]["verifier"]["fact_checker"] = "fact_checker"
     agent = config["functions"].get(AGENT_FUNCTION)  # absent when the plain Researcher is configured
-    if agent is not None and settings.web_search is not None:
-        tools = [t for t in agent.get("tool_names", []) if t != WEB_TOOL]
-        agent["tool_names"] = tools + [WEB_TOOL] if settings.web_search else tools
+    for tool, enabled in ((WEB_TOOL, settings.web_search), (DOCS_TOOL, settings.uploads)):
+        if agent is not None and enabled is not None:
+            tools = [t for t in agent.get("tool_names", []) if t != tool]
+            agent["tool_names"] = tools + [tool] if enabled else tools
+    if settings.uploads is not None:  # the Controller's upload retrieval follows the same switch
+        has_retriever = UPLOADS_RETRIEVER in config["functions"]
+        config["workflow"]["uploads"] = UPLOADS_RETRIEVER if settings.uploads and has_retriever else None
 
     rails = config["functions"]["guardrails"]
     effective = {"retry_cap": config["workflow"]["retry_cap"],
                  "rails": {r: bool(rails.get(r, True)) for r in GuardrailSettings.model_fields},
                  "fact_check": "fact_checker" in config["functions"]["verifier"],
-                 "web_search": agent is not None and WEB_TOOL in agent.get("tool_names", [])}
+                 "web_search": agent is not None and WEB_TOOL in agent.get("tool_names", []),
+                 "uploads": bool(config["workflow"].get("uploads"))
+                 or (agent is not None and DOCS_TOOL in agent.get("tool_names", []))}
     return config, effective
 
 

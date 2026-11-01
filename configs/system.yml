@@ -21,6 +21,16 @@ functions:
     retriever: retriever
     guardrails: guardrails
     top_k: 4
+  uploads_retriever:         # relevant uploaded chunks join every Controller retrieval
+    _type: uploads_retriever
+    embedder_name: corpus_embedder
+    top_k: 3
+    min_score: 0.2           # cosine cut-off; measured: related questions 0.30-0.55, unrelated <= 0.03
+  docs_search:               # agent tool over the user's uploaded documents (ChromaDB, data/uploads/)
+    _type: docs_search_tool
+    embedder_name: corpus_embedder
+    guardrails: guardrails
+    top_k: 4
   web_search:
     _type: web_search_tool
     guardrails: guardrails
@@ -29,7 +39,7 @@ functions:
   research_agent:
     _type: react_agent
     llm_name: generator
-    tool_names: [corpus_search, web_search]
+    tool_names: [corpus_search, docs_search, web_search]
     max_tool_calls: 4      # hard budget per draft; the Controller's retry cap bounds the whole loop
     use_native_tool_calling: true
     pass_tool_call_errors_to_agent: true
@@ -66,6 +76,7 @@ workflow:
   researcher: researcher
   verifier: verifier
   guardrails: guardrails
+  uploads: uploads_retriever
   retry_cap: 2
   per_query_k: 5
   max_evidence: 10

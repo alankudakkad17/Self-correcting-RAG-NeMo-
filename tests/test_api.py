@@ -31,7 +31,7 @@ def test_build_config_applies_overrides_without_touching_the_base():
 
 def test_build_config_defaults_and_unknown_rail():
     _, effective = build_config(ApiSettings(), base=BASE)
-    assert effective == {"retry_cap": 2, "fact_check": True, "web_search": True,
+    assert effective == {"retry_cap": 2, "fact_check": True, "web_search": True, "uploads": False,
                          "rails": {r: True for r in effective["rails"]}}
     assert set(effective["rails"]) == {"injection", "off_topic", "unsafe", "retrieval", "groundedness", "citations",
                                        "pii", "abstention"}
@@ -132,3 +132,51 @@ def test_unknown_rail_is_422_and_other_failures_502(client):
 def test_health_and_settings(client):
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/settings").json()["retry_cap"] == 2  # from configs/system.yml
+
+
+def test_uploads_switch_edits_the_agent_tool_list():
+    config, effective = build_config(ApiSettings(uploads=True), base=BASE)
+    assert config["functions"]["research_agent"]["tool_names"] == ["corpus_search", "web_search", "docs_search"]
+    assert effective["uploads"] is True
+    config, effective = build_config(ApiSettings(uploads=False, web_search=False), base=config)
+    assert config["functions"]["research_agent"]["tool_names"] == ["corpus_search"]
+    assert effective["uploads"] is False and effective["web_search"] is False
+
+
+class FakeStore:
+
+    def __init__(self):
+        self.docs = {}
+
+    async def ingest(self, filename, data):
+        if filename.endswith(".exe"):
+            from src.uploads.extract import UnsupportedFile
+            raise UnsupportedFile(f"{filename}: only .md, .pdf, .txt files are supported")
+        self.docs["up_1"] = {"doc_id": "up_1", "filename": filename, "chunks": 1, "uploaded_unix": 0}
+        return {**self.docs["up_1"], "status": "added"}
+
+    def list_documents(self):
+        return list(self.docs.values())
+
+    def delete(self, doc_id):
+        return self.docs.pop(doc_id, None) is not None
+
+
+def test_document_endpoints(client):
+    client.app.state.store = FakeStore()
+    resp = client.post("/documents", files=[("files", ("notes.txt", b"hello")), ("files", ("virus.exe", b"x"))])
+    assert resp.status_code == 200
+    assert [r["status"] for r in resp.json()] == ["added", "rejected"]  # one bad file does not stop the others
+    assert "only" in resp.json()[1]["reason"]
+    assert [d["filename"] for d in client.get("/documents").json()] == ["notes.txt"]
+    assert client.delete("/documents/up_1").json() == {"deleted": "up_1"}
+    assert client.delete("/documents/up_1").status_code == 404
+
+
+def test_uploads_switch_also_controls_the_controller_retrieval():
+    with_uploads = {"workflow": {"retry_cap": 2, "uploads": "uploads_retriever"},
+                    "functions": {**BASE["functions"], "uploads_retriever": {"_type": "uploads_retriever"}}}
+    config, effective = build_config(ApiSettings(uploads=False), base=with_uploads)
+    assert config["workflow"]["uploads"] is None and effective["uploads"] is False
+    config, effective = build_config(ApiSettings(uploads=True), base=config)
+    assert config["workflow"]["uploads"] == "uploads_retriever" and effective["uploads"] is True

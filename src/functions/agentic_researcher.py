@@ -16,6 +16,7 @@ from nat.plugin_api import FunctionRef
 from nat.plugin_api import register_function
 
 from src import agent_cache  # noqa: F401  (persistent cache for the agent's LLM calls)
+from src.functions.search_tools import DocsSearchToolConfig
 from src.functions.search_tools import WebSearchToolConfig
 from src.functions.search_tools import collect_tool_results
 from src.parsing import parse_draft
@@ -41,14 +42,14 @@ class AgenticResearcherConfig(FunctionBaseConfig, name="agentic_researcher"):
     agent: FunctionRef  # a `react_agent` entry under functions:
 
 
-def has_web_search(builder: Builder, agent_name) -> bool:
-    """True if the agent's tool list includes a web search tool. The agent's tool_names in YAML is the single
-    switch for web access; the prompt follows it."""
+def has_tool(builder: Builder, agent_name, tool_config_type: type) -> bool:
+    """True if the agent's tool list includes a tool of this config type. The agent's tool_names in YAML is the
+    single switch for web and uploaded-document access; the prompt follows it."""
     for tool in getattr(builder.get_function_config(agent_name), "tool_names", []):
         try:
-            if isinstance(builder.get_function_config(tool), WebSearchToolConfig):
+            if isinstance(builder.get_function_config(tool), tool_config_type):
                 return True
-        except Exception:  # e.g. a function group name: not a web search tool
+        except Exception:  # e.g. a function group name: not one of our tools
             continue
     return False
 
@@ -56,12 +57,13 @@ def has_web_search(builder: Builder, agent_name) -> bool:
 @register_function(config_type=AgenticResearcherConfig)
 async def agentic_researcher(config: AgenticResearcherConfig, builder: Builder):
     agent = await builder.get_function(config.agent)
-    web_search = has_web_search(builder, config.agent)
+    web_search = has_tool(builder, config.agent, WebSearchToolConfig)
+    docs_search = has_tool(builder, config.agent, DocsSearchToolConfig)
 
     async def _research(request: ResearchRequest) -> ResearchOutput:
         """Draft an answer with claim-level citations, searching for more evidence when needed."""
         task = agent_research_prompt(request.question, request.evidence, request.sub_questions, request.feedback,
-                                     web_search=web_search)
+                                     web_search=web_search, docs_search=docs_search)
         with collect_tool_results() as found:
             try:
                 reply = await agent.ainvoke(task, to_type=str)

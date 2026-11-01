@@ -32,6 +32,11 @@ from src.state import VerifyOutput
 from src.state import VerifyRequest
 
 
+def is_upload(doc_id: str) -> bool:
+    """Chunk ids from the uploaded-documents store start with "up_" (src/uploads/store.py)."""
+    return doc_id.startswith("up_")
+
+
 def apply_fact_checks(verdicts: list[Verdict], checks: list[FactCheck],
                       require_confirmation: bool = False) -> list[Verdict]:
     """Downgrade "supported" claims the web check does not back. Other labels are left as they are.
@@ -84,7 +89,9 @@ async def verifier(config: VerifierConfig, builder: Builder):
         ]
 
         checks = []
-        supported = [c for c in to_check if llm_verdicts[c.claim_id].label == "supported"]
+        # Claims citing the user's uploaded documents are never web-checked: that would send private content to
+        # a third-party search engine (and the web would not know it anyway).
+        supported = [c for c in to_check if llm_verdicts[c.claim_id].label == "supported" and not is_upload(c.doc_id)]
         if fact_checker and supported:
             out = await fact_checker.ainvoke(FactCheckRequest(claims=supported, evidence=request.evidence),
                                              to_type=FactCheckOutput)

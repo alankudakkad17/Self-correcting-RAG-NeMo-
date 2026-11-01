@@ -76,12 +76,30 @@ class FakeBuilder:
 def test_web_search_is_detected_from_the_agent_tool_list():
     from types import SimpleNamespace
 
-    from src.functions.agentic_researcher import has_web_search
+    from src.functions.agentic_researcher import has_tool
     from src.functions.search_tools import CorpusSearchToolConfig
     from src.functions.search_tools import WebSearchToolConfig
 
     tools = {"corpus_search": CorpusSearchToolConfig(retriever="retriever"), "web_search": WebSearchToolConfig()}
     with_web = FakeBuilder({**tools, "agent": SimpleNamespace(tool_names=["corpus_search", "web_search"])})
     without = FakeBuilder({**tools, "agent": SimpleNamespace(tool_names=["corpus_search", "some_group"])})
-    assert has_web_search(with_web, "agent") is True
-    assert has_web_search(without, "agent") is False  # unknown names (e.g. groups) are skipped
+    assert has_tool(with_web, "agent", WebSearchToolConfig) is True
+    assert has_tool(without, "agent", WebSearchToolConfig) is False  # unknown names (e.g. groups) are skipped
+
+
+def test_docs_search_is_mentioned_only_when_available():
+    doc = RetrievedDoc(doc_id="Ed_Wood", title="Ed Wood", text="Film maker.", score=1, rank=1)
+    assert "docs_search" in agent_research_prompt("What does my report say?", [doc], docs_search=True)
+    assert "docs_search" not in agent_research_prompt("Q?", [doc], docs_search=False)
+
+
+def test_only_relevant_unheld_upload_chunks_are_kept():
+    from src.functions.search_tools import relevant_uploads
+
+    def chunk(i, score):
+        return RetrievedDoc(doc_id=f"up_x_{i}", title="memo.md", text="t", score=score, rank=i)
+
+    docs = [chunk(0, 0.55), chunk(1, 0.46), chunk(2, 0.33), chunk(3, 0.03)]
+    assert [d.doc_id for d in relevant_uploads(docs, 0.2, exclude={"up_x_1"}, k=5)] == ["up_x_0", "up_x_2"]
+    assert len(relevant_uploads(docs, 0.2, exclude=set(), k=2)) == 2  # top_k respected
+    assert relevant_uploads([chunk(0, 0.03)], 0.2, exclude=set(), k=3) == []  # unrelated question: nothing

@@ -75,3 +75,23 @@ def test_claim_rows_and_citation_markers():
     assert rows[1]["verdict"] == "not verified"
     assert rows[1]["web check"] == "Web: not checked"
     assert answer_with_citations("Paris", claims) == r"Paris \[1\]\[2\]"
+
+
+def test_document_upload_list_and_delete():
+    seen = []
+
+    def handler(request):
+        seen.append((request.method, request.url.path))
+        if request.method == "POST":
+            body = request.read()
+            assert b'filename="notes.txt"' in body and b"hello" in body  # multipart upload
+            return httpx.Response(200, json=[{"filename": "notes.txt", "status": "added", "chunks": 1}])
+        if request.method == "GET":
+            return httpx.Response(200, json=[{"doc_id": "up_1", "filename": "notes.txt", "chunks": 1}])
+        return httpx.Response(200, json={"deleted": "up_1"})
+
+    client = client_with(handler)
+    assert client.upload_documents([("notes.txt", b"hello")])[0]["status"] == "added"
+    assert client.list_documents()[0]["doc_id"] == "up_1"
+    assert client.delete_document("up_1") == {"deleted": "up_1"}
+    assert seen == [("POST", "/documents"), ("GET", "/documents"), ("DELETE", "/documents/up_1")]

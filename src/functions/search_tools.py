@@ -1,9 +1,10 @@
 """Search tools for the ReAct Researcher (registered toolkit functions; the agent picks them by name).
 
 - corpus_search_tool: the frozen encyclopedia corpus (hybrid retrieval + rerank)
+- docs_search_tool:   the user's uploaded documents (ChromaDB vector store, src/uploads/store.py)
 - web_search_tool:    the live web (Tavily)
-Every passage goes through the retrieval rail (NeMo Guardrails) before the agent sees it: web and corpus text
-is untrusted. Each tool also records what it returned, so the Controller can add those passages to the evidence
+Every passage goes through the retrieval rail (NeMo Guardrails) before the agent sees it: web, corpus and
+uploaded text is untrusted. Each tool also records what it returned, so the Controller can add those passages to the evidence
 pool and the Verifier can check claims that cite them (see collect_tool_results).
 """
 
@@ -13,6 +14,7 @@ from contextvars import ContextVar
 from pydantic import Field
 
 from nat.plugin_api import Builder
+from nat.plugin_api import EmbedderRef
 from nat.plugin_api import FunctionBaseConfig
 from nat.plugin_api import FunctionInfo
 from nat.plugin_api import FunctionRef
@@ -23,6 +25,7 @@ from src.functions.guardrails import GuardrailResponse
 from src.functions.retriever import RetrievalOutput
 from src.functions.retriever import RetrievalRequest
 from src.state import RetrievedDoc
+from src.uploads.store import get_store
 from src.websearch import TavilyClient
 from src.websearch import web_doc
 
@@ -117,3 +120,57 @@ async def web_search_tool(config: WebSearchToolConfig, builder: Builder):
         return format_passages(docs)
 
     yield FunctionInfo.from_fn(_search, description=_search.__doc__)
+
+
+class DocsSearchToolConfig(FunctionBaseConfig, name="docs_search_tool"):
+    """Agent tool: search the user's uploaded documents (ChromaDB)."""
+    embedder_name: EmbedderRef = Field(description="Same embedder as the corpus index.")
+    guardrails: FunctionRef | None = None
+    top_k: int = Field(default=4, ge=1, le=10)
+
+
+@register_function(config_type=DocsSearchToolConfig)
+async def docs_search_tool(config: DocsSearchToolConfig, builder: Builder):
+    emb_cfg = builder.get_embedder_config(config.embedder_name)
+    rails = await builder.get_function(config.guardrails) if config.guardrails else None
+
+    async def _search(query: str) -> str:
+        """Search the user's uploaded documents. Use it when the question is about an uploaded file or its
+        content. Input: a short search query. Returns passages, each with an id (up_...) you can cite."""
+        store = get_store(emb_cfg.model_name, emb_cfg.base_url)
+        if not store.list_documents():
+            return "No documents have been uploaded."
+        docs = await sanitize(rails, await store.search(query, k=config.top_k))
+        if (collected := _current.get()) is not None:
+            collected.record("docs", query, docs)
+        return format_passages(docs)
+
+    yield FunctionInfo.from_fn(_search, description=_search.__doc__)
+
+
+def relevant_uploads(docs: list[RetrievedDoc], min_score: float, exclude: set[str], k: int) -> list[RetrievedDoc]:
+    """Upload chunks worth adding to the evidence pool: similar enough to the query, not already held.
+    (Measured with the Nemotron embedder: related questions score 0.30-0.55, unrelated ones <= 0.03.)"""
+    return [d for d in docs if d.score >= min_score and d.doc_id not in exclude][:k]
+
+
+class UploadsRetrieverConfig(FunctionBaseConfig, name="uploads_retriever"):
+    """Controller retrieval over uploaded documents: relevant chunks join the evidence pool from the first round,
+    so answering from an uploaded file does not depend on the agent choosing to search it."""
+    embedder_name: EmbedderRef
+    top_k: int = Field(default=3, ge=1, le=10)
+    min_score: float = Field(default=0.2, ge=-1, le=1, description="Cosine similarity cut-off for relevance.")
+
+
+@register_function(config_type=UploadsRetrieverConfig)
+async def uploads_retriever(config: UploadsRetrieverConfig, builder: Builder):
+    emb_cfg = builder.get_embedder_config(config.embedder_name)
+
+    async def _retrieve(request: RetrievalRequest) -> RetrievalOutput:
+        """Uploaded-document chunks relevant to the query (none if nothing is uploaded or nothing is relevant)."""
+        store = get_store(emb_cfg.model_name, emb_cfg.base_url)
+        k = request.top_k or config.top_k
+        docs = await store.search(request.query, k=k + len(request.exclude_ids))
+        return RetrievalOutput(docs=relevant_uploads(docs, config.min_score, set(request.exclude_ids), k))
+
+    yield FunctionInfo.from_fn(_retrieve, description=_retrieve.__doc__)

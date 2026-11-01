@@ -196,6 +196,8 @@ class SelfCorrectingConfig(FunctionBaseConfig, name="self_correcting_workflow"):
     researcher: FunctionRef
     verifier: FunctionRef
     guardrails: FunctionRef | None = Field(default=None, description="Omit to run without NeMo Guardrails.")
+    uploads: FunctionRef | None = Field(default=None, description="An `uploads_retriever`: relevant chunks of the "
+                                        "user's uploaded documents join every retrieval. Omit for corpus only.")
     retry_cap: int = Field(default=2, ge=0)
     per_query_k: int = Field(default=5, ge=1, description="Passages per query in the first retrieval.")
     max_evidence: int = Field(default=10, ge=1, description="Cap on the first evidence pool.")
@@ -210,14 +212,19 @@ async def self_correcting_workflow(config: SelfCorrectingConfig, builder: Builde
     researcher = await builder.get_function(config.researcher)
     verifier = await builder.get_function(config.verifier)
     rails = await builder.get_function(config.guardrails) if config.guardrails else None
+    uploads = await builder.get_function(config.uploads) if config.uploads else None
 
     async def guard(**kwargs) -> GuardrailResponse:
         return await rails.ainvoke(GuardrailRequest(**kwargs), to_type=GuardrailResponse)
 
     async def retrieve(query: str, k: int, exclude: list[str]) -> list[RetrievedDoc]:
-        out = await retriever.ainvoke(RetrievalRequest(query=query, top_k=k, exclude_ids=exclude),
-                                      to_type=RetrievalOutput)
-        return out.docs
+        request = RetrievalRequest(query=query, top_k=k, exclude_ids=exclude)
+        out = await retriever.ainvoke(request, to_type=RetrievalOutput)
+        if uploads is None:
+            return out.docs
+        # Relevant uploaded chunks go first: only chunks above the similarity cut-off are returned at all.
+        found = await uploads.ainvoke(request, to_type=RetrievalOutput)
+        return found.docs + out.docs
 
     async def sanitize(docs: list[RetrievedDoc]) -> tuple[list[RetrievedDoc], list[GuardrailEvent]]:
         out = await guard(stage="passages", question="", docs=docs)
