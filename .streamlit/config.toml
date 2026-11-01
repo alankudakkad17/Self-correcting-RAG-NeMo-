@@ -1,0 +1,16 @@
+# Streamlit theme: cool "proof paper" with slate ink and the copy editor's blue pencil as the accent.
+# Used when Streamlit starts from the project folder (demo.ps1, Docker). The preview launcher passes the same
+# values as --theme.* flags because it starts from the parent folder.
+[theme]
+base = "light"
+primaryColor = "#2B44C8"
+backgroundColor = "#F5F7FA"
+secondaryBackgroundColor = "#E6EBF2"
+textColor = "#1C2633"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"
+
+[server]
+maxUploadSize = 20  # MB; matches the API's limit (src/uploads/extract.py)

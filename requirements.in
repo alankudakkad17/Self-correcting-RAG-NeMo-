@@ -1,5 +1,8 @@
 # Direct dependencies. requirements.txt is the full pinned lock (pip freeze) generated from these.
 nvidia-nat[eval,ragas,profiler]==1.9.0
+# The toolkit's built-in agents (react_agent) live in its LangChain plugin; `nvidia` adds the NIM client.
+# Not [all]: its `community` extra would downgrade the langchain-community version RAGAS needs.
+nvidia-nat-langchain[nvidia]==1.9.0
 # Standalone: nvidia-nat[guardrails] pins nemoguardrails<0.22, which needs `annoy` (no Windows wheel).
 nemoguardrails==0.24.1
 ragas==0.4.3
@@ -9,7 +12,11 @@ openai==1.109.1
 # ragas leaves instructor unpinned and pip resolved 0.4.0 (no from_openai). 1.12.0 is the newest that accepts openai 1.x.
 instructor==1.12.0
 faiss-cpu==1.15.1
-# Fuzzy matching of claims against web results in the Tavily fact check
+# Uploaded documents: embedded vector DB (runs in-process on Windows), PDF text, multipart uploads in FastAPI
+chromadb==1.5.9
+pypdf==6.21.4
+python-multipart==0.0.32
+# Fuzzy location of cited quotes in passages (UI evidence highlighting)
 rapidfuzz==3.14.6
 python-dotenv==1.2.4
 streamlit==1.66.1

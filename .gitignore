@@ -12,6 +12,8 @@ __pycache__/
 data/raw/
 data/index/
 data/cache/
+# User-uploaded documents and their vector store: private, never committed
+data/uploads/
 
 # Per-run logs; summary tables are committed explicitly later
 eval/results/runs/

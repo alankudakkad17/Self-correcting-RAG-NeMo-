@@ -81,7 +81,8 @@ async def run_item(session_manager, item: EvalItem) -> dict:
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/system.yml", help="system YAML")
+    # Corpus-only by default: with agent web search on, "unanswerable" items can be answered from the web.
+    parser.add_argument("--config", default="configs/corpus_only.yml", help="system YAML")
     parser.add_argument("--split", default="pilot", choices=["pilot", "dev", "test"])
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--tag", default="", help="optional suffix for the run directory")

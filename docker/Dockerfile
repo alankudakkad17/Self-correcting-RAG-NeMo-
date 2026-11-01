@@ -16,5 +16,5 @@ COPY eval ./eval
 COPY scripts ./scripts
 RUN pip install --no-cache-dir -e . --no-deps
 
-# data/ (frozen sets, index, caches, examples) is mounted at runtime, see docker-compose.yml
+# data/ (frozen sets, index, caches) is mounted at runtime, see docker-compose.yml
 EXPOSE 8000 8501

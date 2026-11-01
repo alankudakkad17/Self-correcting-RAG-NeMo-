@@ -1,5 +1,6 @@
 # Self-Correcting RAG: the one system.
-#   input rails -> Planner -> hybrid retrieval (+ retrieval rail) -> Researcher (cited draft)
+#   input rails -> Planner -> hybrid retrieval (+ retrieval rail)
+#   -> ReAct Researcher (toolkit react_agent with corpus + web search tools) drafts a cited answer
 #   -> Verifier (different model) + live web fact check (Tavily) -> Controller: accept / retrieve / revise / abstain
 #   -> output rails (groundedness, citations, PII) or abstention rail
 base: llm.yml
@@ -14,12 +15,41 @@ functions:
   planner:
     _type: planner
     llm_name: generator
-  researcher:
-    _type: researcher
+  # Tools the ReAct agent can call (by these names). Results pass through the retrieval rail first.
+  corpus_search:
+    _type: corpus_search_tool
+    retriever: retriever
+    guardrails: guardrails
+    top_k: 4
+  uploads_retriever:         # relevant uploaded chunks join every Controller retrieval
+    _type: uploads_retriever
+    embedder_name: corpus_embedder
+    top_k: 3
+    min_score: 0.2           # cosine cut-off; measured: related questions 0.30-0.55, unrelated <= 0.03
+  docs_search:               # agent tool over the user's uploaded documents (ChromaDB, data/uploads/)
+    _type: docs_search_tool
+    embedder_name: corpus_embedder
+    guardrails: guardrails
+    top_k: 4
+  web_search:
+    _type: web_search_tool
+    guardrails: guardrails
+    max_results: 3
+  # The toolkit's built-in ReAct agent (nvidia-nat-langchain): reasons, calls the tools, writes the cited draft
+  research_agent:
+    _type: react_agent
     llm_name: generator
+    tool_names: [corpus_search, docs_search, web_search]
+    max_tool_calls: 4      # hard budget per draft; the Controller's retry cap bounds the whole loop
+    use_native_tool_calling: true
+    pass_tool_call_errors_to_agent: true
+  researcher:
+    _type: agentic_researcher   # plain single-call alternative: `_type: researcher` with `llm_name: generator`
+    agent: research_agent
   fact_checker:
     _type: tavily_fact_checker
-    threshold: 80          # 0-100 fuzzy match of the claim / quote in a web result
+    llm_name: verifier     # the judge reads the web snippets; not the Researcher's model
+    guardrails: guardrails # web snippets pass the retrieval rail before the judge sees them
     max_results: 5
     search_depth: basic    # basic = 1 credit per search, advanced = 2
     cache: true            # false = fresh results every time (spends credits)
@@ -27,6 +57,7 @@ functions:
     _type: verifier
     llm_name: verifier     # nvidia/nemotron-3.5-lightning-30b-a3b; the Planner/Researcher use `generator`
     fact_checker: fact_checker
+    web_check_required: false  # only a web contradiction downgrades a claim; true = the web must also confirm it
   guardrails:
     _type: guardrails      # NeMo Guardrails; set any rail to false to switch it off
     injection: true
@@ -45,6 +76,7 @@ workflow:
   researcher: researcher
   verifier: verifier
   guardrails: guardrails
+  uploads: uploads_retriever
   retry_cap: 2
   per_query_k: 5
   max_evidence: 10

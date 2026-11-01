@@ -6,8 +6,8 @@ Uses a different model than the Researcher (see configs/system.yml). One LLM cal
   but irrelevant claims (a similarly named entity, a missing hop) passes claim-by-claim checking.
 Deterministic steps around the LLM:
 - before: a claim citing a passage that is not in the evidence pool is "unsupported" without asking the model;
-- after:  a "supported" claim that live web search results (Tavily) do not back is downgraded to
-          "unsupported" (see apply_fact_checks). Search errors leave the model's verdict unchanged.
+- after:  a "supported" claim that live web search results (Tavily, judged by an LLM) contradict or do not back
+          is downgraded to "unsupported" (see apply_fact_checks). Search or judge errors leave the verdict unchanged.
 """
 
 from nat.plugin_api import Builder
@@ -32,14 +32,26 @@ from src.state import VerifyOutput
 from src.state import VerifyRequest
 
 
-def apply_fact_checks(verdicts: list[Verdict], checks: list[FactCheck]) -> list[Verdict]:
-    """Downgrade "supported" claims that the web search does not back. Other labels are left as they are."""
+def is_upload(doc_id: str) -> bool:
+    """Chunk ids from the uploaded-documents store start with "up_" (src/uploads/store.py)."""
+    return doc_id.startswith("up_")
+
+
+def apply_fact_checks(verdicts: list[Verdict], checks: list[FactCheck],
+                      require_confirmation: bool = False) -> list[Verdict]:
+    """Downgrade "supported" claims the web check does not back. Other labels are left as they are.
+
+    A web contradiction always downgrades. With require_confirmation, so does "the web does not mention it" or
+    "no results"; without it, only contradictions count. Errors never change a verdict.
+    """
+    failing = {"contradicted"} | ({"not_found", "no_results"} if require_confirmation else set())
     by_claim = {c.claim_id: c for c in checks}
     out = []
     for v in verdicts:
         check = by_claim.get(v.claim_id)
-        if v.label == "supported" and check and check.status in ("not_found", "no_results"):
-            v = Verdict(claim_id=v.claim_id, label="unsupported", reason=f"Web check failed: {check.detail}")
+        if v.label == "supported" and check and check.status in failing:
+            v = Verdict(claim_id=v.claim_id, label="unsupported",
+                        reason=f"Web check ({check.status.replace('_', ' ')}): {check.detail}")
         out.append(v)
     return out
 
@@ -48,6 +60,9 @@ class VerifierConfig(FunctionBaseConfig, name="verifier"):
     """Check every claim against the passages it cites, the answer against the claims, and claims on the web."""
     llm_name: LLMRef
     fact_checker: FunctionRef | None = None  # a `tavily_fact_checker` entry; omit to skip the web check
+    # False: only a web contradiction downgrades a claim. True: the web must also confirm it ("not mentioned" fails),
+    # which rejects true but obscure corpus facts the search does not cover.
+    web_check_required: bool = False
 
 
 @register_function(config_type=VerifierConfig)
@@ -74,12 +89,14 @@ async def verifier(config: VerifierConfig, builder: Builder):
         ]
 
         checks = []
-        supported = [c for c in to_check if llm_verdicts[c.claim_id].label == "supported"]
+        # Claims citing the user's uploaded documents are never web-checked: that would send private content to
+        # a third-party search engine (and the web would not know it anyway).
+        supported = [c for c in to_check if llm_verdicts[c.claim_id].label == "supported" and not is_upload(c.doc_id)]
         if fact_checker and supported:
             out = await fact_checker.ainvoke(FactCheckRequest(claims=supported, evidence=request.evidence),
                                              to_type=FactCheckOutput)
             checks = out.checks
-            verdicts = apply_fact_checks(verdicts, checks)
+            verdicts = apply_fact_checks(verdicts, checks, config.web_check_required)
         return VerifyOutput(verdicts=verdicts, fact_checks=checks)
 
     yield FunctionInfo.from_fn(_verify, description=_verify.__doc__)

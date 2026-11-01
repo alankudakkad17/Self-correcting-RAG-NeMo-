@@ -7,8 +7,8 @@ import re
 from rapidfuzz import fuzz
 
 VERDICT_COLORS = {"supported": "green", "unsupported": "orange", "contradicted": "red", None: "gray"}
-WEB_LABELS = {"confirmed": "Web: confirmed", "not_found": "Web: not confirmed", "no_results": "Web: no results",
-              "error": "Web: check failed", None: "Web: not checked"}
+WEB_LABELS = {"confirmed": "Web: confirmed", "contradicted": "Web: contradicted", "not_found": "Web: not mentioned",
+              "no_results": "Web: no results", "error": "Web: check failed", None: "Web: not checked"}
 
 _MD_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|>~:$<])")
 
@@ -51,12 +51,31 @@ def answer_with_citations(answer: str, claims: list[dict]) -> str:
     return f"{escape_md(answer)} {escape_md(markers)}".strip()
 
 
-def claim_rows(claims: list[dict]) -> list[dict]:
-    """Rows for the claims table."""
-    rows = []
-    for i, c in enumerate(claims, start=1):
-        check = c.get("web_check") or {}
-        rows.append({"#": i, "claim": c["text"], "verdict": c.get("label") or "not verified", "source": c["doc_id"],
-                     "web check": WEB_LABELS.get(check.get("status")), "web source": check.get("url", ""),
-                     "reason": c.get("reason", "")})
-    return rows
+WEB_COLORS = {"confirmed": "green", "contradicted": "red", "not_found": "gray", "no_results": "gray", "error": "gray",
+              None: "gray"}
+ACTION_ICONS = {"accept": ":material/check_circle:", "retrieve": ":material/manage_search:",
+                "revise": ":material/edit_note:", "abstain": ":material/do_not_disturb_on:"}
+ACTION_LABELS = {"accept": "accepted", "retrieve": "searched again", "revise": "revised the draft",
+                 "abstain": "gave up: not enough evidence"}
+RAIL_ACTION_COLORS = {"passed": "green", "modified": "blue", "blocked": "red"}
+
+
+def outcome(response: dict) -> dict:
+    """What the result header says: a stamp (label, colour, icon) and one line of detail."""
+    if response["blocked"]:
+        return {"label": "Refused", "color": "red", "icon": ":material/block:", "detail": response["answer"]}
+    if response["abstained"]:
+        return {"label": "Not enough evidence", "color": "orange", "icon": ":material/help:",
+                "detail": "No answer could be backed by verified sources, so none is given."}
+    claims = response["claims"]
+    supported = sum(c.get("label") == "supported" for c in claims)
+    follows = (response.get("answer_verdict") or {}).get("label") == "supported"
+    detail = f"{supported} of {len(claims)} claims supported by their sources"
+    detail += ", and the answer follows from them." if follows else "."
+    return {"label": "Verified", "color": "green", "icon": ":material/verified:", "detail": detail}
+
+
+def web_badge(check: dict | None) -> str:
+    """Markdown badge for a claim's web check."""
+    status = (check or {}).get("status")
+    return f":{WEB_COLORS.get(status, 'gray')}-badge[{WEB_LABELS.get(status, WEB_LABELS[None])}]"

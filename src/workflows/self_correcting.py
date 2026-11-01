@@ -42,6 +42,7 @@ from src.state import ClaimWithVerdict
 from src.state import Draft
 from src.state import GuardrailEvent
 from src.state import Plan
+from src.state import ResearchOutput
 from src.state import ResearchRequest
 from src.state import RetrievedDoc
 from src.state import RunState
@@ -85,7 +86,7 @@ def merge_round_robin(rankings: list[list[RetrievedDoc]], exclude: set[str], lim
 
 PlanFn = Callable[[str], Awaitable[Plan]]
 RetrieveFn = Callable[[str, int, list[str]], Awaitable[list[RetrievedDoc]]]
-ResearchFn = Callable[[ResearchRequest], Awaitable[Draft]]
+ResearchFn = Callable[[ResearchRequest], Awaitable[ResearchOutput]]
 VerifyFn = Callable[[VerifyRequest], Awaitable[VerifyOutput]]
 SanitizeFn = Callable[[list[RetrievedDoc]], Awaitable[tuple[list[RetrievedDoc], list[GuardrailEvent]]]]
 
@@ -116,16 +117,23 @@ class Controller:
         feedback = ""
 
         while True:
-            draft = await self.research(ResearchRequest(question=question, evidence=state.evidence,
-                                                        sub_questions=state.plan.sub_questions, feedback=feedback))
+            researched = await self.research(ResearchRequest(question=question, evidence=state.evidence,
+                                                             sub_questions=state.plan.sub_questions, feedback=feedback))
+            draft = researched.draft
+            # Passages the ReAct Researcher found with its tools join the pool (already sanitized by the tools),
+            # so the Verifier can check claims that cite them.
+            held = state.evidence_ids()
+            found = [d for d in researched.new_docs if d.doc_id not in held]
+            state.evidence.extend(found)
+            new_ids = new_ids + [d.doc_id for d in found]
             checked = (await self.verify(VerifyRequest(question=question, answer=draft.answer, claims=draft.claims,
                                                        evidence=state.evidence))) if draft.claims else VerifyOutput(
                                                            verdicts=[])
             verdicts = checked.verdicts
             action = decide(verdicts, state.retries_used, self.retry_cap)
             state.attempts.append(Attempt(index=len(state.attempts), queries=queries, new_doc_ids=new_ids,
-                                          draft=draft, verdicts=verdicts, fact_checks=checked.fact_checks,
-                                          action=action))
+                                          agent_searches=researched.searches, draft=draft, verdicts=verdicts,
+                                          fact_checks=checked.fact_checks, action=action))
             if action in (Action.ACCEPT, Action.ABSTAIN):
                 return state
 
@@ -188,6 +196,8 @@ class SelfCorrectingConfig(FunctionBaseConfig, name="self_correcting_workflow"):
     researcher: FunctionRef
     verifier: FunctionRef
     guardrails: FunctionRef | None = Field(default=None, description="Omit to run without NeMo Guardrails.")
+    uploads: FunctionRef | None = Field(default=None, description="An `uploads_retriever`: relevant chunks of the "
+                                        "user's uploaded documents join every retrieval. Omit for corpus only.")
     retry_cap: int = Field(default=2, ge=0)
     per_query_k: int = Field(default=5, ge=1, description="Passages per query in the first retrieval.")
     max_evidence: int = Field(default=10, ge=1, description="Cap on the first evidence pool.")
@@ -202,14 +212,19 @@ async def self_correcting_workflow(config: SelfCorrectingConfig, builder: Builde
     researcher = await builder.get_function(config.researcher)
     verifier = await builder.get_function(config.verifier)
     rails = await builder.get_function(config.guardrails) if config.guardrails else None
+    uploads = await builder.get_function(config.uploads) if config.uploads else None
 
     async def guard(**kwargs) -> GuardrailResponse:
         return await rails.ainvoke(GuardrailRequest(**kwargs), to_type=GuardrailResponse)
 
     async def retrieve(query: str, k: int, exclude: list[str]) -> list[RetrievedDoc]:
-        out = await retriever.ainvoke(RetrievalRequest(query=query, top_k=k, exclude_ids=exclude),
-                                      to_type=RetrievalOutput)
-        return out.docs
+        request = RetrievalRequest(query=query, top_k=k, exclude_ids=exclude)
+        out = await retriever.ainvoke(request, to_type=RetrievalOutput)
+        if uploads is None:
+            return out.docs
+        # Relevant uploaded chunks go first: only chunks above the similarity cut-off are returned at all.
+        found = await uploads.ainvoke(request, to_type=RetrievalOutput)
+        return found.docs + out.docs
 
     async def sanitize(docs: list[RetrievedDoc]) -> tuple[list[RetrievedDoc], list[GuardrailEvent]]:
         out = await guard(stage="passages", question="", docs=docs)
@@ -218,7 +233,7 @@ async def self_correcting_workflow(config: SelfCorrectingConfig, builder: Builde
     controller = Controller(
         plan=lambda q: planner.ainvoke(q, to_type=Plan),
         retrieve=retrieve,
-        research=lambda request: researcher.ainvoke(request, to_type=Draft),
+        research=lambda request: researcher.ainvoke(request, to_type=ResearchOutput),
         verify=lambda request: verifier.ainvoke(request, to_type=VerifyOutput),
         sanitize=sanitize if rails else None,
         retry_cap=config.retry_cap, per_query_k=config.per_query_k, max_evidence=config.max_evidence,
